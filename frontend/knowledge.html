@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<!-- 知识库管理页面 -->
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>知识库管理 - ponyrag知识库系统</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><circle cx='32' cy='32' r='30' fill='%236366f1'/><text x='32' y='44' text-anchor='middle' fill='white' font-size='28' font-weight='bold' font-family='Arial'>AI</text></svg>">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+    <div class="app-container">
+
+        <!-- 侧边栏 -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <h2>智能客服</h2>
+                <button class="sidebar-toggle" id="sidebarToggle" title="收起侧边栏">
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="15 18 9 12 15 6"></polyline>
+                    </svg>
+                </button>
+            </div>
+
+            <!-- 导航菜单 -->
+            <div class="sidebar-section">
+                <h3>导航</h3>
+                <nav class="nav-menu">
+                    <a href="/" class="nav-item">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                        </svg>
+                        <span>聊天对话</span>
+                    </a>
+                    <a href="/knowledge" class="nav-item active">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+                            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+                        </svg>
+                        <span>知识库管理</span>
+                    </a>
+                </nav>
+            </div>
+
+            <!-- 系统状态 -->
+            <div class="sidebar-section">
+                <h3>系统状态</h3>
+                <div class="status-info">
+                    <div class="status-item">
+                        <span class="status-label">知识库数量:</span>
+                        <span class="status-value" id="kbCount">-</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">启用状态:</span>
+                        <span class="status-value" id="enabledCount">-</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">向量库条目:</span>
+                        <span class="status-value" id="dbCount">-</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">上传文件:</span>
+                        <span class="status-value" id="fileCount">-</span>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- 主内容区 -->
+        <main class="main-content">
+
+            <!-- 顶部栏 -->
+            <header class="topbar">
+                <button class="menu-btn" id="menuBtn" title="菜单">
+                    <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="3" y1="6" x2="21" y2="6"></line>
+                        <line x1="3" y1="12" x2="21" y2="12"></line>
+                        <line x1="3" y1="18" x2="21" y2="18"></line>
+                    </svg>
+                </button>
+
+                <div class="topbar-title">
+                    <h1>知识库管理</h1>
+                </div>
+
+                <div class="topbar-actions">
+                    <button onclick="testModalOpen()" style="padding: 6px 12px; background: orange; color: white; border: none; border-radius: 6px; cursor: pointer; margin-right: 12px; font-size: 13px;">
+                        🧪 测试弹窗
+                    </button>
+                    <span class="connection-status" id="connectionStatus">
+                        <span class="status-dot"></span>
+                        <span class="status-text">连接中...</span>
+                    </span>
+                </div>
+            </header>
+
+            <!-- 知识库列表 -->
+            <div class="kb-container">
+
+                <!-- 操作栏 -->
+                <div class="kb-toolbar">
+                    <button class="btn btn-primary" id="createKbBtn">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="12" y1="5" x2="12" y2="19"></line>
+                            <line x1="5" y1="12" x2="19" y2="12"></line>
+                        </svg>
+                        创建知识库
+                    </button>
+                </div>
+
+                <!-- 知识库卡片列表 -->
+                <div class="kb-grid" id="kbGrid">
+                    <!-- 动态渲染知识库卡片 -->
+                </div>
+
+            </div>
+
+        </main>
+    </div>
+
+    <!-- 创建/编辑知识库 Modal -->
+    <div class="modal-overlay" id="kbModal" style="display:none;">
+        <div class="modal">
+            <h3 class="modal-title" id="kbModalTitle">创建知识库</h3>
+
+            <div class="modal-body">
+                <div class="settings-field">
+                    <label>知识库名称 <span style="color: var(--danger);">*</span></label>
+                    <input type="text" id="kbNameInput" class="model-select" placeholder="例如：客服知识库" maxlength="50">
+                </div>
+
+                <div class="settings-field">
+                    <label>描述 <span style="color: var(--text-secondary); font-size: 0.85rem;">(可选)</span></label>
+                    <textarea id="kbDescInput" class="kb-desc-input" placeholder="简要描述知识库的用途..." rows="3" maxlength="200"></textarea>
+                </div>
+
+                <p class="settings-hint" id="kbModalHint"></p>
+            </div>
+
+            <div class="modal-actions">
+                <button class="btn btn-secondary" id="kbCancelBtn">取消</button>
+                <button class="btn btn-primary" id="kbSaveBtn">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 删除确认 Modal -->
+    <div class="modal-overlay" id="deleteKbModal" style="display:none;">
+        <div class="modal">
+            <div class="modal-icon">
+                <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="3 6 5 6 21 6"></polyline>
+                    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
+                    <path d="M10 11v6M14 11v6"></path>
+                    <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path>
+                </svg>
+            </div>
+
+            <h3 class="modal-title">删除知识库</h3>
+            <p class="modal-body" id="deleteKbModalBody">确定要删除该知识库吗？</p>
+            <p class="modal-hint">此操作将删除知识库中的所有文档和向量数据，不可恢复。</p>
+
+            <div class="modal-actions">
+                <button class="btn btn-secondary" id="deleteKbCancelBtn">取消</button>
+                <button class="btn btn-danger" id="deleteKbConfirmBtn">删除</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 文档管理 Modal -->
+    <div class="modal-overlay" id="docsModal" style="display:none;">
+        <div class="modal docs-modal">
+            <div class="modal-header">
+                <h3 class="modal-title" id="docsModalTitle">文档管理</h3>
+                <button class="icon-btn" id="docsCloseBtn">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+
+            <div class="modal-body" style="padding: 20px;">
+                <!-- 工具栏 -->
+                <div class="docs-toolbar">
+                    <input type="file" id="docsFileInput" accept=".pdf,.docx,.doc,.txt,.md,.xlsx,.xls,.pptx,.ppt" multiple hidden>
+                    <button class="btn btn-primary btn-sm" id="docsUploadBtn">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="17 8 12 3 7 8"></polyline>
+                            <line x1="12" y1="3" x2="12" y2="15"></line>
+                        </svg>
+                        上传文档
+                    </button>
+                    <button class="btn btn-danger btn-sm" id="docsBatchDeleteBtn" disabled>
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="3 6 5 6 21 6"></polyline>
+                            <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
+                        </svg>
+                        <span id="docsBatchDeleteText">批量删除</span>
+                    </button>
+                </div>
+
+                <!-- 上传进度 -->
+                <div class="upload-progress" id="docsUploadProgress" style="display:none; margin: 12px 0;">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="docsProgressFill"></div>
+                    </div>
+                    <span class="progress-text" id="docsProgressText">上传中...</span>
+                </div>
+
+                <!-- 文档列表 -->
+                <div class="docs-list" id="docsList">
+                    <div class="empty-state">加载中...</div>
+                </div>
+            </div>
+
+            <!-- 底部按钮区 -->
+            <div class="modal-actions">
+                <button class="btn btn-secondary" id="docsModalCloseBtn">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/knowledge.js"></script>
+
+</body>
+
+</html>
