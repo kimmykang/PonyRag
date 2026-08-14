@@ -13,6 +13,7 @@ if errorlevel 1 (
 )
 
 echo [1/3] Locating backend directory...
+REM %~dp0 is the directory where this bat file is located (always relative to the script)
 set "BACKEND_DIR=%~dp0backend"
 
 if not exist "%BACKEND_DIR%" (
