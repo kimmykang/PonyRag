@@ -1,7 +1,20 @@
 """
-智能客服系统 - FastAPI 主应用
+PonyRAG 知识库系统 - FastAPI 主应用
 
 作者: kimikang
+版权所有 Copyright 2024 kimikang
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 
 职责：
   - 提供 RESTful HTTP API，供前端调用

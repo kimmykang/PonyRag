@@ -1,325 +1,318 @@
-# 🤖 ponyrag — 企业或者私人的本地知识库系统
+# PonyRAG 知识库系统
 
-> 基于本地大模型（Ollama）的 RAG 智能问答系统，专为企业或私人知识库场景设计。支持多知识库管理、文档上传、语义检索与多轮对话。
+<div align="center">
+
+**PonyRAG Knowledge Base System**
+
+*🐴 A lightweight, production-ready RAG knowledge base system powered by LangChain, Ollama, and ChromaDB*
+
+[中文](#中文文档) | [English](#english-documentation)
 
 [![Python](https://img.shields.io/badge/Python-3.11+-blue?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.138-green?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![ChromaDB](https://img.shields.io/badge/ChromaDB-1.5-purple)](https://www.trychroma.com/)
-[![Ollama](https://img.shields.io/badge/Ollama-Local-orange?logo=ollama&logoColor=white)](https://ollama.com/)
-[![License](https://img.shields.io/badge/License-MIT-lightgrey)](LICENSE)
+[![Ollama](https://img.shields.io/badge/Ollama-Local-orange)](https://ollama.com/)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-[快速开始](#-快速开始) • [功能特性](#-功能特性) • [技术架构](#-技术架构) • [API 文档](#-api-文档) • [常见问题](#-常见问题)
-
----
-
-## 📸 界面预览
-
-### 聊天界面
-- 左侧：系统状态、知识库选择、聊天历史
-- 中间：对话区域、AI 回答附带参考来源
-- 右上角：模型设置与参数调整
-
-### 知识库管理
-- 创建/编辑/启用/禁用知识库
-- 上传文档（自动解析为 Markdown）
-- 查看向量库条目统计和文件列表
-- 删除文档（自动清理向量数据）
+</div>
 
 ---
 
-## ✨ 功能特性
+<div id="中文文档"></div>
 
-- **多知识库管理** — 创建、编辑、启用/禁用多个独立知识库，每库独立向量空间
-- **文档上传与解析** — 支持 PDF、DOCX、XLSX、PPTX、TXT、MD 等格式，自动转 Markdown 后索引
-- **语义检索 + Rerank** — ChromaDB 向量检索召回，Rerank 模型精排，提升答案相关性
-- **多轮对话** — 保留聊天历史，支持上下文关联问答
-- **模型热切换** — 前端界面直接切换 Chat / Embed / Rerank 模型，无需修改配置文件
-- **Embedding 一致性保护** — 切换 Embed 模型时自动清空旧向量库并重新索引，避免维度冲突
-- **参数可调** — 前端参数设置页面实时调整 TOP_K、RERANK_TOP_K、CHUNK_SIZE 等 RAG 参数
-- **完全本地运行** — 所有模型通过 Ollama 在本地推理，数据不出本机
+## � 项目简介
 
----
+**PonyRAG** 是一个基于 RAG（检索增强生成）技术的本地知识库问答系统，专为企业和个人知识管理场景设计。系统完全本地部署，保护数据隐私，支持多种文档格式，提供智能问答和知识检索服务。
 
-## 🏗️ 技术架构
+### ✨ 核心特性
+
+- 🚀 **开箱即用** — 本地部署，无需云服务，保护数据隐私
+- 📚 **多格式支持** — PDF、Word、Excel、PowerPoint、Markdown、TXT 自动解析
+- 🧠 **智能检索** — 向量检索 + Rerank 精排，确保答案准确性
+- 💬 **多轮对话** — 支持上下文记忆的连续对话
+- 🗄️ **多知识库管理** — 创建、启用/禁用多个独立知识库
+- 🎨 **现代界面** — 响应式 Web UI，支持移动端和桌面端
+- ⚡ **高性能** — ChromaDB 向量存储，毫秒级检索响应
+- 🔄 **模型热切换** — 在线更换 LLM/Embedding/Rerank 模型
+
+### 🏗️ 技术架构
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                    Browser (前端)                    │
-│  index.html + knowledge.html + app.js + style.css   │
-└──────────────────────┬──────────────────────────────┘
-                       │ HTTP REST API
-┌──────────────────────▼──────────────────────────────┐
-│              FastAPI 后端 (app.py)                   │
-│                                                     │
-│  ┌──────────────┐  ┌───────────────┐  ┌──────────┐  │
-│  │ RAG Engine   │  │ Doc Processor │  │ KB管理   │  │
-│  │ rag_engine   │  │ doc_processor │  │ knowledge│  │
-│  │ vector_store │  │ (markitdown)  │  │ _base    │  │
-│  └──────┬───────┘  └───────────────┘  └──────────┘  │
-│         │                                            │
-│  ┌──────▼──────────────────────────────────────┐    │
-│  │           ChromaDB (向量数据库)              │    │
-│  │   每个知识库一个 Collection，持久化存储      │    │
-│  └─────────────────────────────────────────────┘    │
-│                                                     │
-│  ┌──────────────────────────────────────────────┐   │
-│  │              SQLite (聊天历史)               │   │
-│  └──────────────────────────────────────────────┘   │
-└──────────────────────┬──────────────────────────────┘
-                       │ HTTP (localhost:11434)
-┌──────────────────────▼──────────────────────────────┐
-│                  Ollama 本地推理                     │
-│   Chat Model │ Embedding Model │ Rerank Model        │
-└─────────────────────────────────────────────────────┘
+用户交互
+  ↓
+┌─────────────────────────────────────────┐
+│  前端 (Vanilla JavaScript)              │
+│  - 聊天界面 (index.html)                │
+│  - 知识库管理 (knowledge.html)          │
+└───────────────┬─────────────────────────┘
+                │ REST API
+┌───────────────▼─────────────────────────┐
+│  后端 (FastAPI + Python)                │
+│  ┌─────────────────────────────────┐    │
+│  │  RAG Engine (rag_engine.py)    │    │
+│  │  - 向量检索                      │    │
+│  │  - Rerank 精排                   │    │
+│  │  - LLM 生成回答                  │    │
+│  └─────────────────────────────────┘    │
+│  ┌─────────────────────────────────┐    │
+│  │  文档处理 (document_processor)  │    │
+│  │  - Markitdown 解析              │    │
+│  │  - 文本分块                      │    │
+│  └─────────────────────────────────┘    │
+│  ┌─────────────────────────────────┐    │
+│  │  知识库管理 (knowledge_base)    │    │
+│  │  - 多知识库元数据管理            │    │
+│  │  - SQLite 存储                   │    │
+│  └─────────────────────────────────┘    │
+└───────────────┬─────────────────────────┘
+                │
+┌───────────────▼─────────────────────────┐
+│  ChromaDB (向量数据库)                  │
+│  - 每个知识库独立 Collection            │
+│  - 本地持久化存储                        │
+└─────────────────────────────────────────┘
+                │
+┌───────────────▼─────────────────────────┐
+│  Ollama (本地大模型推理)                │
+│  - 对话模型 (Chat Model)                │
+│  - 嵌入模型 (Embedding Model)           │
+│  - 精排模型 (Rerank Model)              │
+└─────────────────────────────────────────┘
 ```
 
----
+**技术栈：**
+- **后端**: FastAPI + LangChain + Python 3.11+
+- **向量数据库**: ChromaDB (本地持久化)
+- **大语言模型**: Ollama (支持 Qwen、Llama 等开源模型)
+- **文档解析**: Markitdown (支持多种文档格式)
+- **前端**: Vanilla JavaScript + Marked.js
+- **数据存储**: SQLite (聊天历史 + 知识库元数据)
 
-## 🚀 快速开始
+### 🎯 主要功能
 
-### 环境要求
+#### 1. 知识库管理
+- ✅ 创建/编辑/删除知识库
+- ✅ 启用/禁用知识库
+- ✅ 查看文档数和向量数统计
+- ✅ 每个知识库独立的向量空间
 
-- Python 3.11+
-- [Ollama](https://ollama.com/) 已安装并运行
-- 推荐 16GB+ 内存，有独立显卡效果更佳
+#### 2. 文档管理
+- ✅ 拖拽上传或点击上传
+- ✅ 自动格式转换（PDF/Word → Markdown）
+- ✅ 批量删除文档
+- ✅ 实时索引进度显示
+- ✅ 支持格式：PDF、DOCX、XLSX、PPTX、TXT、MD
 
-### 1. 拉取模型
+#### 3. 智能问答
+- ✅ 基于知识库的精准回答
+- ✅ 显示参考来源和相关度评分
+- ✅ 选择特定知识库或全库检索
+- ✅ Markdown 格式渲染（代码高亮、表格等）
+- ✅ 多轮对话上下文记忆
 
+#### 4. 模型管理
+- ✅ 在线切换对话模型
+- ✅ 在线切换 Embedding 模型（自动重建索引）
+- ✅ 调整检索参数（TOP-K、Rerank-TOP-K 等）
+- ✅ 实时显示模型加载状态
+
+### 📦 快速开始
+
+#### 前置要求
+
+- **Python 3.11+**
+- **Ollama** ([安装指南](https://ollama.com/))
+- **推荐配置**: 16GB+ 内存，NVIDIA GPU（可选）
+
+#### 安装步骤
+
+**1. 克隆项目**
 ```bash
-# 对话模型（按需选择）
-ollama pull qwen3.6:27b        # 推荐，中文效果好
-# ollama pull qwen2.5:7b       # 轻量替代
-
-# 嵌入模型
-ollama pull qwen3-embedding:4b  # 2560维，速度快
-# ollama pull qwen3-embedding:8b # 4096维，精度更高
-
-# Rerank 模型
-ollama pull qllama/bge-reranker-v2-m3:f16  # 推荐，中英文均衡
+git clone https://github.com/kimikang/ponyrag.git
+cd ponyrag
 ```
 
-### 2. 安装依赖
-
+**2. 安装依赖**
 ```bash
 cd backend
 pip install -r requirements.txt
+pip install markitdown
 ```
 
-### 3. 配置参数（可选）
+**3. 安装 Ollama 并下载模型**
 
-复制并编辑配置文件：
+访问 [https://ollama.com](https://ollama.com) 下载并安装 Ollama
 
+下载推荐模型（约 15GB）：
 ```bash
-cp backend/.env.example backend/.env
+# 对话模型
+ollama pull qwen3.6:27b
+
+# 嵌入模型
+ollama pull qwen3-embedding:4b
+
+# Rerank 模型
+ollama pull qllama/bge-reranker-v2-m3:f16
 ```
 
-或直接编辑 `backend/.env`：
+**4. 启动服务**
 
-```env
-CHAT_MODEL=qwen3.6:27b
-EMBED_MODEL=qwen3-embedding:4b
-RERANK_MODEL=qllama/bge-reranker-v2-m3:f16
-TOP_K=6
-RERANK_TOP_K=4
-```
-
-### 4. 启动服务
-
-**Windows：**
+**Windows:**
 ```bash
 start.bat
 ```
 
-**Windows（Conda 环境）：**
+**Windows (Conda):**
 ```bash
 "start for conda.bat"
 ```
 
-**Linux / macOS：**
+**Linux/macOS:**
 ```bash
-chmod +x start.sh && ./start.sh
+chmod +x start.sh
+./start.sh
 ```
 
-**手动启动：**
-```bash
-cd backend && python app.py
+**5. 访问应用**
+
+浏览器会自动打开 [http://localhost:8001](http://localhost:8001)
+
+### 📝 使用说明
+
+#### 创建知识库并上传文档
+
+1. 点击顶部导航「知识库管理」
+2. 点击「创建知识库」按钮，填写名称和描述
+3. 在知识库卡片上点击「管理文档」
+4. 拖拽或点击上传 PDF/Word/Excel 等文件
+5. 等待文档自动解析和索引完成
+
+#### 开始提问
+
+1. 返回主页（聊天界面）
+2. 在左侧「检索知识库」下拉框选择知识库（或选择「所有已启用的知识库」）
+3. 在输入框输入问题，按 Enter 发送
+4. AI 会基于知识库内容生成回答，并显示参考来源
+
+#### 模型和参数设置
+
+点击右上角 ⚙️ 图标打开设置面板：
+
+- **模型设置**：切换 Chat/Embed/Rerank 模型
+- **参数设置**：调整 TOP-K、Rerank-TOP-K、分块大小等
+
+### ⚙️ 配置说明
+
+编辑 `backend/.env` 文件自定义配置：
+
+```env
+# Ollama 服务地址
+OLLAMA_BASE_URL=http://localhost:11434
+
+# 模型配置
+CHAT_MODEL=qwen3.6:27b                      # 对话模型
+EMBED_MODEL=qwen3-embedding:4b               # 嵌入模型
+RERANK_MODEL=qllama/bge-reranker-v2-m3:f16  # Rerank 模型
+
+# RAG 参数
+TOP_K=6                # 向量检索召回数量
+RERANK_TOP_K=4         # Rerank 精排后保留数量
+CHUNK_SIZE=500         # 文档分块大小（token）
+CHUNK_OVERLAP=50       # 分块重叠大小（token）
+
+# 服务配置
+HOST=0.0.0.0
+PORT=8001
 ```
 
-服务启动后浏览器会自动打开 [http://localhost:8001](http://localhost:8001)
-
----
-
-## 📁 项目结构
+### � 项目结构
 
 ```
-insureai/
-├── backend/
-│   ├── app.py                # FastAPI 主应用，所有 API 路由
-│   ├── rag_engine.py         # RAG 引擎：检索 → Rerank → LLM 生成
-│   ├── vector_store.py       # ChromaDB 向量库封装
-│   ├── document_processor.py # 文档解析、分块
-│   ├── knowledge_base.py     # 知识库元数据管理（SQLite）
-│   ├── chat_history.py       # 聊天历史存储
-│   ├── config.py             # 配置加载（读取 .env）
-│   ├── requirements.txt      # Python 依赖
-│   ├── .env                  # 环境配置（模型、路径、参数）
-│   ├── uploads/              # 上传文件存储（按知识库分目录）
-│   └── vector_db/            # ChromaDB 持久化数据
-├── frontend/
-│   ├── index.html            # 聊天主页面
-│   ├── knowledge.html        # 知识库管理页面
-│   ├── app.js                # 聊天页面逻辑
-│   ├── knowledge.js          # 知识库管理逻辑
-│   └── style.css             # 全局样式
-├── start.bat                 # Windows 启动脚本
-├── start for conda.bat       # Windows Conda 环境启动
-└── start.sh                  # Linux/macOS 启动脚本
+ponyrag/
+├── backend/                    # 后端服务
+│   ├── app.py                 # FastAPI 主应用
+│   ├── rag_engine.py          # RAG 核心引擎
+│   ├── vector_store.py        # 向量数据库管理
+│   ├── document_processor.py  # 文档处理模块
+│   ├── knowledge_base.py      # 知识库管理
+│   ├── chat_history.py        # 聊天历史存储
+│   ├── config.py              # 配置管理
+│   ├── requirements.txt       # Python 依赖
+│   ├── .env                   # 环境配置
+│   ├── uploads/               # 文档上传目录
+│   └── vector_db/             # ChromaDB 数据目录
+├── frontend/                   # 前端界面
+│   ├── index.html             # 聊天界面
+│   ├── knowledge.html         # 知识库管理界面
+│   ├── app.js                 # 聊天页面逻辑
+│   ├── knowledge.js           # 知识库管理逻辑
+│   └── style.css              # 全局样式
+├── start.bat                   # Windows 启动脚本
+├── start for conda.bat         # Conda 环境启动脚本
+├── start.sh                    # Linux/macOS 启动脚本
+└── README.md                   # 项目文档
 ```
 
----
+### 🔌 API 文档
 
-## ⚙️ 配置说明
-
-### `.env` 完整参数
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama 服务地址 |
-| `CHAT_MODEL` | `qwen3.6:27b` | 对话生成模型 |
-| `EMBED_MODEL` | `qwen3-embedding:4b` | 文本向量化模型 |
-| `RERANK_MODEL` | `qllama/bge-reranker-v2-m3:f16` | 检索结果精排模型 |
-| `VECTOR_DB_PATH` | `./vector_db` | ChromaDB 数据目录 |
-| `UPLOAD_DIR` | `./uploads` | 文件上传目录 |
-| `HOST` | `0.0.0.0` | 服务监听地址 |
-| `PORT` | `8001` | 服务监听端口 |
-| `TOP_K` | `6` | 向量检索召回数量 |
-| `RERANK_TOP_K` | `4` | Rerank 后保留数量（送入 LLM） |
-| `CHUNK_SIZE` | `500` | 文档分块大小（token） |
-| `CHUNK_OVERLAP` | `50` | 分块重叠大小（token） |
-
-> **⚠️ 注意：** 修改 `EMBED_MODEL` 后，已有向量库与新模型维度不兼容。系统会在重启时自动检测并清空旧向量库，重新索引所有文档。也可通过前端「设置 → 模型设置」切换，系统会自动处理。
-
----
-
-## 📖 使用指南
-
-### 知识库管理
-
-1. 点击顶栏「知识库管理」图标或左侧导航进入管理页面
-2. 点击「创建知识库」，填写名称和描述
-3. 点击知识库卡片上的「管理文档」，上传 PDF/DOCX/XLSX 等文件
-4. 文档上传后自动解析并向量化，可立即用于问答
-
-### 聊天问答
-
-1. 在左侧「系统状态」区域选择要检索的知识库（默认检索全部已启用的）
-2. 在输入框输入问题，按 Enter 发送
-3. AI 回答会附带「参考来源」，显示来自哪个文档的哪一段
-
-### 模型与参数设置
-
-点击右上角⚙️ 图标打开设置面板：
-
-- **模型设置** — 切换 Chat / Embed / Rerank 模型（从本地 Ollama 已安装的模型中选择）
-- **参数设置** — 调整 TOP_K、RERANK_TOP_K、CHUNK_SIZE 等 RAG 参数，实时生效
-
----
-
-## 🔌 API 文档
-
-启动后访问 [http://localhost:8001/docs](http://localhost:8001/docs) 查看完整 Swagger 文档。
+启动服务后访问 [http://localhost:8001/docs](http://localhost:8001/docs) 查看完整的 Swagger API 文档。
 
 主要接口：
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `POST` | `/api/chat` | 聊天问答 |
+| `POST` | `/api/chat` | 发送问题并获取回答 |
 | `GET` | `/api/knowledge-bases` | 获取知识库列表 |
-| `POST` | `/api/knowledge-bases` | 创建知识库 |
+| `POST` | `/api/knowledge-bases` | 创建新知识库 |
+| `PUT` | `/api/knowledge-bases/{kb_id}` | 更新知识库信息 |
+| `DELETE` | `/api/knowledge-bases/{kb_id}` | 删除知识库 |
 | `POST` | `/api/upload` | 上传文档 |
 | `GET` | `/api/documents` | 获取文档列表 |
 | `DELETE` | `/api/documents/{filename}` | 删除文档 |
 | `GET` | `/api/stats` | 获取统计信息 |
 | `GET` | `/api/model-status` | 获取模型加载状态 |
-| `POST` | `/api/config/models` | 切换模型 |
-| `GET/POST` | `/api/config/rag-params` | 读取/保存 RAG 参数 |
+| `POST` | `/api/config/models` | 切换模型配置 |
 
----
-
-## 🛠️ 常见问题
+### 🛠️ 常见问题
 
 **Q: 启动后模型一直显示「加载中」？**
 
-Ollama 首次加载大模型需要将权重载入显存，耗时 30 秒到几分钟不等，请耐心等待。可在 Ollama 终端查看加载进度。
+Ollama 首次加载大模型需要时间（30秒-几分钟），请耐心等待。可在 Ollama 终端查看加载进度。
 
 **Q: 提问返回「知识库中暂无相关内容」？**
 
-- 确认知识库中已上传文档，且向量库条目数 > 0
-- 检查所选知识库是否已启用
-- 若刚换过 Embed 模型，等待重新索引完成
-
-**Q: Windows 下请求 Ollama 返回 502？**
-
-系统代理可能拦截了 localhost 请求。项目已内置代理绕过逻辑，若仍有问题，请在系统代理设置中将 `127.0.0.1` 和 `localhost` 加入排除列表。
-
-**Q: 上传 XLSX/PPTX 文件失败？**
-
-确保安装了 `markitdown` 依赖：
-```bash
-pip install markitdown
-```
-
-**Q: 切换 Embedding 模型后提示维度不匹配？**
-
-不同的 Embedding 模型输出维度不同（如 `qwen3-embedding:4b` 是 2560 维，`:8b` 是 4096 维）。系统会自动检测并提示重建向量库。点击确认后会自动删除旧向量数据并重新索引所有文档。
+- 确认知识库已上传文档且向量库条目数 > 0
+- 检查知识库是否已启用
+- 若刚切换 Embedding 模型，等待重新索引完成
 
 **Q: 如何提升检索速度？**
 
-1. 降低 `TOP_K` 和 `RERANK_TOP_K`（设置 → 参数设置）
-2. 使用更小的 Embedding 模型（如 `:4b` 而非 `:8b`）
-3. 减小文档分块大小 `CHUNK_SIZE`
-4. 有条件的话使用 GPU 运行 Ollama
+1. 降低 TOP_K 和 RERANK_TOP_K 参数
+2. 使用更小的模型（如 qwen2.5:7b）
+3. 使用 GPU 运行 Ollama
 
 **Q: 支持哪些文档格式？**
 
-目前支持：
-- 文本类：TXT, MD, CSV
-- 文档类：PDF, DOCX, PPTX, XLSX
-- 未来计划支持：HTML, JSON, 图片（OCR）
+目前支持：PDF、DOCX、XLSX、PPTX、TXT、MD、CSV
 
----
+**Q: 切换 Embedding 模型后提示维度不匹配？**
 
-## ⚡ 性能优化建议
+不同模型输出维度不同。系统会自动检测并提示重建向量库，确认后会自动删除旧数据并重新索引。
 
-### 推荐配置
+### ⚡ 性能优化建议
 
-| 内存 | 推荐模型组合 | 预期速度 |
+| 内存 | 推荐模型组合 | 适用场景 |
 |------|-------------|---------|
-| 16GB | qwen2.5:7b + qwen3-embedding:4b | 中等，适合个人使用 |
-| 32GB | qwen3.6:27b + qwen3-embedding:4b | 快速，生产可用 |
-| 64GB+ | qwen3.6:27b + qwen3-embedding:8b | 最佳精度和速度 |
+| 16GB | qwen2.5:7b + qwen3-embedding:4b | 个人使用 |
+| 32GB | qwen3.6:27b + qwen3-embedding:4b | 生产环境 |
+| 64GB+ | qwen3.6:27b + qwen3-embedding:8b | 最佳性能 |
 
-### TOP_K 参数调优
+**TOP_K 参数调优：**
+- 准确度优先：`TOP_K=10, RERANK_TOP_K=6`
+- 平衡（推荐）：`TOP_K=6, RERANK_TOP_K=4`
+- 速度优先：`TOP_K=3, RERANK_TOP_K=2`
 
-- **准确度优先**：`TOP_K=10`, `RERANK_TOP_K=6`（检索更全面，但慢 30%）
-- **平衡**（默认）：`TOP_K=6`, `RERANK_TOP_K=4`（推荐）
-- **速度优先**：`TOP_K=3`, `RERANK_TOP_K=2`（快 50%，但可能漏召回）
-
-### GPU 加速
-
-如有 NVIDIA 显卡，确保 Ollama 使用 GPU：
-
-```bash
-# Windows 检查
-ollama run qwen3.6:27b "test"  # 观察输出是否显示 GPU
-
-# Linux 检查
-nvidia-smi  # 运行模型时观察显存占用
-```
-
----
-
-## 🚧 开发路线
+### 🚧 开发路线
 
 - [x] 多知识库管理
 - [x] 文档上传与自动解析
@@ -333,14 +326,177 @@ nvidia-smi  # 运行模型时观察显存占用
 - [ ] Docker 一键部署
 - [ ] 知识库版本管理
 
----
-
-## 🤝 贡献
+### 🤝 贡献指南
 
 欢迎提交 Issue 和 Pull Request！
 
+1. Fork 本仓库
+2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
+3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
+4. 推送到分支 (`git push origin feature/AmazingFeature`)
+5. 开启 Pull Request
+
+### 📄 开源协议
+
+本项目采用 [Apache License 2.0](LICENSE) 开源协议。
+
+### 👨‍💻 作者
+
+**kimikang**
+
 ---
 
-## 📄 License
+<div id="english-documentation"></div>
 
-MIT License — 自由使用、修改和分发。
+## 📖 About
+
+**PonyRAG** is a local knowledge base Q&A system based on RAG (Retrieval-Augmented Generation) technology, designed for enterprise and personal knowledge management scenarios. The system is fully deployed locally, protects data privacy, supports multiple document formats, and provides intelligent Q&A and knowledge retrieval services.
+
+### ✨ Key Features
+
+- 🚀 **Ready to Use** — Local deployment, no cloud services required, data privacy protected
+- 📚 **Multi-format Support** — Auto-parsing for PDF, Word, Excel, PowerPoint, Markdown, TXT
+- 🧠 **Smart Retrieval** — Vector search + Rerank for accurate answers
+- 💬 **Multi-turn Dialogue** — Context-aware conversations with memory
+- 🗄️ **Multiple Knowledge Bases** — Create, enable/disable multiple independent knowledge bases
+- 🎨 **Modern UI** — Responsive web interface for mobile and desktop
+- ⚡ **High Performance** — ChromaDB vector storage with millisecond-level response
+- 🔄 **Hot Model Swapping** — Switch LLM/Embedding/Rerank models on-the-fly
+
+### 🏗️ Tech Stack
+
+- **Backend**: FastAPI + LangChain + Python 3.11+
+- **Vector Database**: ChromaDB (local persistence)
+- **LLM**: Ollama (supports Qwen, Llama, etc.)
+- **Document Parser**: Markitdown
+- **Frontend**: Vanilla JavaScript + Marked.js
+- **Data Storage**: SQLite (chat history + knowledge base metadata)
+
+### � Quick Start
+
+#### Prerequisites
+
+- **Python 3.11+**
+- **Ollama** ([Installation Guide](https://ollama.com/))
+- **Recommended**: 16GB+ RAM, NVIDIA GPU (optional)
+
+#### Installation
+
+**1. Clone the repository**
+```bash
+git clone https://github.com/kimikang/ponyrag.git
+cd ponyrag
+```
+
+**2. Install dependencies**
+```bash
+cd backend
+pip install -r requirements.txt
+pip install markitdown
+```
+
+**3. Install Ollama and download models**
+
+Visit [https://ollama.com](https://ollama.com) to download and install Ollama
+
+Download recommended models (~15GB):
+```bash
+# Chat model
+ollama pull qwen3.6:27b
+
+# Embedding model
+ollama pull qwen3-embedding:4b
+
+# Rerank model
+ollama pull qllama/bge-reranker-v2-m3:f16
+```
+
+**4. Start the service**
+
+**Windows:**
+```bash
+start.bat
+```
+
+**Linux/macOS:**
+```bash
+chmod +x start.sh
+./start.sh
+```
+
+**5. Access the application**
+
+Browser will automatically open [http://localhost:8001](http://localhost:8001)
+
+### 📝 Usage
+
+#### Create Knowledge Base and Upload Documents
+
+1. Click "Knowledge Base Management" in the top navigation
+2. Click "Create Knowledge Base" button, fill in name and description
+3. Click "Manage Documents" on the knowledge base card
+4. Drag and drop or click to upload PDF/Word/Excel files
+5. Wait for automatic document parsing and indexing
+
+#### Start Asking Questions
+
+1. Return to the home page (chat interface)
+2. Select a knowledge base in the left sidebar (or "All Enabled Knowledge Bases")
+3. Type your question in the input box and press Enter
+4. AI will generate answers based on knowledge base content and show references
+
+### ⚙️ Configuration
+
+Edit `backend/.env` file to customize configuration:
+
+```env
+# Ollama service URL
+OLLAMA_BASE_URL=http://localhost:11434
+
+# Model configuration
+CHAT_MODEL=qwen3.6:27b                      # Chat model
+EMBED_MODEL=qwen3-embedding:4b               # Embedding model
+RERANK_MODEL=qllama/bge-reranker-v2-m3:f16  # Rerank model
+
+# RAG parameters
+TOP_K=6                # Vector search recall count
+RERANK_TOP_K=4         # Top results after reranking
+CHUNK_SIZE=500         # Document chunk size (tokens)
+CHUNK_OVERLAP=50       # Chunk overlap size (tokens)
+
+# Service configuration
+HOST=0.0.0.0
+PORT=8001
+```
+
+### 🔌 API Documentation
+
+Visit [http://localhost:8001/docs](http://localhost:8001/docs) after starting the service to view the complete Swagger API documentation.
+
+### 🤝 Contributing
+
+Issues and Pull Requests are welcome!
+
+1. Fork this repository
+2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the branch (`git push origin feature/AmazingFeature`)
+5. Open a Pull Request
+
+### 📄 License
+
+This project is licensed under the [Apache License 2.0](LICENSE).
+
+### 👨‍💻 Author
+
+**kimikang**
+
+---
+
+<div align="center">
+
+**⭐ Star this repository if you find it helpful!**
+
+Made with ❤️ by kimikang
+
+</div>
