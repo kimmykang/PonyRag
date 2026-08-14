@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<!-- ponyrag知识库系统主页面，采用侧边栏 + 主内容区布局 -->
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <!-- 响应式视口设置，确保移动端正常显示 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ponyrag知识库系统</title>
+    <!-- 内联 SVG 作为网站图标，显示紫色圆形 AI 标志 -->
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><circle cx='32' cy='32' r='30' fill='%236366f1'/><text x='32' y='44' text-anchor='middle' fill='white' font-size='28' font-weight='bold' font-family='Arial'>AI</text></svg>">
+    <!-- 引入外部样式表 -->
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+    <!-- 整体应用容器，包含侧边栏和主内容区 -->
+    <div class="app-container">
+
+        <!-- =====================================================
+             侧边栏：文档管理、系统状态、模型状态
+             ===================================================== -->
+        <aside class="sidebar" id="sidebar">
+
+            <!-- 侧边栏顶部标题栏 -->
+            <div class="sidebar-header">
+                <h2>ponyrag知识库系统</h2>
+                <!-- 收起侧边栏按钮，点击后向左折叠 -->
+                <button class="sidebar-toggle" id="sidebarToggle" title="收起侧边栏">
+                    <!-- 左箭头 SVG 图标 -->
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="15 18 9 12 15 6"></polyline>
+                    </svg>
+                </button>
+            </div>
+
+            <!-- -----------------------------------------------
+                 导航菜单
+                 ----------------------------------------------- -->
+            <div class="sidebar-section">
+                <h3>导航</h3>
+                <nav class="nav-menu" style="display: flex; flex-direction: column; gap: 8px;">
+                    <a href="/" class="nav-item active" style="display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 8px; text-decoration: none; color: white; background: var(--primary);">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                        </svg>
+                        <span>聊天对话</span>
+                    </a>
+                    <a href="/knowledge" class="nav-item" style="display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 8px; text-decoration: none; color: var(--text-secondary);">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+                            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+                        </svg>
+                        <span>知识库管理</span>
+                    </a>
+                </nav>
+            </div>
+
+            <!-- -----------------------------------------------
+                 系统状态区域：向量库条目数、上传文件数、清空按钮
+                 ----------------------------------------------- -->
+            <div class="sidebar-section">
+                <h3>系统状态</h3>
+
+                <!-- 知识库选择 -->
+                <div class="kb-selector" style="margin-bottom: 16px;">
+                    <label style="display: block; font-size: 13px; color: var(--text-secondary); margin-bottom: 6px;">选择知识库:</label>
+                    <select id="chatKbSelect" class="kb-select-input" style="width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font-size: 13px; cursor: pointer;">
+                        <option value="all">所有已启用的知识库</option>
+                    </select>
+                </div>
+
+                <!-- 统计数据展示 -->
+                <div class="status-info" id="statusInfo">
+                    <!-- 向量数据库中的条目数量 -->
+                    <div class="status-item">
+                        <span class="status-label">向量库条目:</span>
+                        <span class="status-value" id="dbCount">-</span>
+                    </div>
+                    <!-- 已上传的源文件数量 -->
+                    <div class="status-item">
+                        <span class="status-label">上传文件:</span>
+                        <span class="status-value" id="fileCount">-</span>
+                    </div>
+                </div>
+
+                <!-- 重新索引进度条区域，默认隐藏 -->
+                <div class="reindex-progress" id="reindexProgress" style="display:none;">
+                    <div class="reindex-header">
+                        <span class="reindex-label">🔄 重新索引中</span>
+                        <span class="reindex-count" id="reindexCount">0/0</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="reindexProgressFill"></div>
+                    </div>
+                    <span class="reindex-status" id="reindexStatus">准备中...</span>
+                </div>
+            </div>
+
+            <!-- -----------------------------------------------
+                 模型状态区域：实时显示对话/嵌入/Rerank 模型的加载状态
+                 ----------------------------------------------- -->
+            <div class="sidebar-section">
+                <h3>模型状态</h3>
+                <div id="modelStatusList">
+
+                    <!-- 对话模型状态条目，dot 颜色表示当前状态（检查中/就绪/错误） -->
+                    <div class="model-status-item" id="ms-chat">
+                        <span class="model-status-dot checking"></span>
+                        <span class="model-status-name">对话模型</span>
+                        <span class="model-status-msg">检查中...</span>
+                    </div>
+
+                    <!-- 嵌入模型状态条目（用于文本向量化） -->
+                    <div class="model-status-item" id="ms-embed">
+                        <span class="model-status-dot checking"></span>
+                        <span class="model-status-name">嵌入模型</span>
+                        <span class="model-status-msg">检查中...</span>
+                    </div>
+
+                    <!-- Rerank 模型状态条目（用于搜索结果重排序） -->
+                    <div class="model-status-item" id="ms-rerank">
+                        <span class="model-status-dot checking"></span>
+                        <span class="model-status-name">Rerank模型</span>
+                        <span class="model-status-msg">检查中...</span>
+                    </div>
+
+                </div>
+            </div>
+
+        </aside>
+
+        <!-- =====================================================
+             主内容区：顶部栏 + 聊天区域 + 输入区域
+             ===================================================== -->
+        <main class="main-content">
+
+            <!-- 顶部栏：菜单按钮、标题、连接状态、设置按钮 -->
+            <header class="topbar">
+                <!-- 汉堡菜单按钮，用于在移动端切换侧边栏显隐 -->
+                <button class="menu-btn" id="menuBtn" title="菜单">
+                    <!-- 三条横线（汉堡）图标 -->
+                    <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="3" y1="6" x2="21" y2="6"></line>
+                        <line x1="3" y1="12" x2="21" y2="12"></line>
+                        <line x1="3" y1="18" x2="21" y2="18"></line>
+                    </svg>
+                </button>
+
+                <!-- 顶栏标题 -->
+                <div class="topbar-title">
+                    <h1>让我们开启您的对话吧</h1>
+                </div>
+
+                <!-- 顶栏右侧操作区 -->
+                <div class="topbar-actions">
+                    <!-- 模型加载状态指示器：仅在模型加载中/异常/就绪时临时显示 -->
+                    <span class="model-load-status" id="modelLoadStatus" title="模型加载状态" style="display:none;">
+                        <!-- 状态圆点，CSS 类控制颜色（loading/error/ready） -->
+                        <span class="model-load-dot loading"></span>
+                        <span class="model-load-text">模型加载中...</span>
+                    </span>
+
+                    <!-- 后端连接状态指示器 -->
+                    <span class="connection-status" id="connectionStatus">
+                        <span class="status-dot"></span>
+                        <span class="status-text">连接中...</span>
+                    </span>
+
+                    <!-- 清空聊天记录按钮（垃圾桶图标） -->
+                    <button class="icon-btn" id="clearChatBtn" title="清空聊天记录">
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="3 6 5 6 21 6"></polyline>
+                            <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
+                            <path d="M10 11v6M14 11v6"></path>
+                            <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path>
+                        </svg>
+                    </button>
+
+                    <!-- 知识库管理按钮 -->
+                    <a href="/knowledge" class="icon-btn" title="知识库管理" style="text-decoration:none;">
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+                            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+                        </svg>
+                    </a>
+
+                    <!-- 打开模型设置对话框的按钮（齿轮图标） -->
+                    <button class="icon-btn" id="settingsBtn" title="模型设置">
+                        <!-- 齿轮 SVG 图标 -->
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="3"></circle>
+                            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                        </svg>
+                    </button>
+                </div>
+            </header>
+
+            <!-- -----------------------------------------------
+                 聊天区域：欢迎页 + 消息列表
+                 ----------------------------------------------- -->
+            <div class="chat-container" id="chatContainer">
+
+                <!-- 欢迎页：首次进入或未发送消息时显示 -->
+                <div class="welcome-message" id="welcomeMessage">
+                    <!-- AI 圆形 Logo 图标 -->
+                    <div class="welcome-icon">
+                        <svg viewBox="0 0 64 64" width="64" height="64" fill="none">
+                            <circle cx="32" cy="32" r="30" fill="#6366f1" opacity="0.1" />
+                            <circle cx="32" cy="32" r="24" fill="#6366f1" opacity="0.2" />
+                            <text x="32" y="40" text-anchor="middle" fill="#6366f1" font-size="24" font-weight="bold">AI</text>
+                        </svg>
+                    </div>
+                    <h2>欢迎使用ponyrag知识库系统</h2>
+                    <p>上传文档到知识库，然后向我提问吧！</p>
+
+                    <!-- 示例问题按钮区域，点击后直接填充并发送 -->
+                    <div class="example-questions">
+                        <p class="example-title">试试这些问题：</p>
+                        <!-- data-q 属性存储点击后要发送的问题文本 -->
+                        <button class="example-q" data-q="什么是ponyrag知识库系统？">什么是ponyrag知识库系统？</button>
+                        <button class="example-q" data-q="如何上传和管理文档？">如何上传和管理文档？</button>
+                        <button class="example-q" data-q="系统的技术架构是什么？">系统的技术架构是什么？</button>
+                    </div>
+                </div>
+
+                <!-- 消息列表容器，由 JS 动态向其中插入用户和 AI 消息气泡 -->
+                <div class="messages" id="messages"></div>
+
+            </div>
+
+            <!-- -----------------------------------------------
+                 底部输入区域：文本框 + 发送按钮 + 快捷键提示
+                 ----------------------------------------------- -->
+            <div class="input-area">
+                <form class="input-form" id="chatForm">
+                    <!-- 多行文本输入框，高度自动随内容增长（最大 120px） -->
+                    <textarea id="questionInput" class="question-input" placeholder="输入您的问题..." rows="1" autocomplete="off"></textarea>
+
+                    <!-- 发送按钮（初始禁用），输入内容后启用 -->
+                    <button type="submit" class="send-btn" id="sendBtn" disabled>
+                        <!-- 发送（纸飞机）图标 -->
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="22" y1="2" x2="11" y2="13"></line>
+                            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                        </svg>
+                    </button>
+                </form>
+                <!-- 键盘快捷键说明 -->
+                <p class="input-hint">按 Enter 发送，Shift+Enter 换行</p>
+            </div>
+
+        </main>
+    </div>
+
+    <!-- =====================================================
+         设置 Modal 弹窗：包含「模型设置」和「参数设置」两个 Tab
+         ===================================================== -->
+    <div class="modal-overlay" id="settingsModal" style="display:none;">
+        <div class="modal settings-modal">
+
+            <!-- 弹窗顶部：图标 + 标题 + 关闭按钮 -->
+            <div class="settings-modal-header">
+                <svg class="ollama-icon" viewBox="0 0 64 64" width="32" height="32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <rect width="64" height="64" rx="14" fill="#fff" />
+                    <circle cx="22" cy="26" r="7" fill="#333" />
+                    <circle cx="42" cy="26" r="7" fill="#333" />
+                    <circle cx="22" cy="26" r="3" fill="#fff" />
+                    <circle cx="42" cy="26" r="3" fill="#fff" />
+                    <path d="M20 42 C20 36 44 36 44 42" stroke="#333" stroke-width="3" stroke-linecap="round" fill="none" />
+                </svg>
+                <div>
+                    <h3 class="modal-title" style="text-align:left;margin:0">系统设置</h3>
+                    <p style="font-size:0.8rem;color:var(--text-secondary);margin:2px 0 0">模型与检索参数配置</p>
+                </div>
+                <button class="icon-btn settings-close-btn" id="settingsCloseBtn">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+
+            <!-- Tab 切换栏 -->
+            <div class="settings-tabs">
+                <button class="settings-tab active" id="tabModelBtn" data-tab="model">
+                    🤖 模型设置
+                </button>
+                <button class="settings-tab" id="tabParamsBtn" data-tab="params">
+                    ⚙️ 参数设置
+                </button>
+            </div>
+
+            <!-- Tab 内容：模型设置 -->
+            <div class="settings-tab-content" id="tabModelContent">
+                <div class="settings-field">
+                    <label>对话模型 <span class="field-badge">Chat</span></label>
+                    <select id="chatModelSelect" class="model-select"></select>
+                </div>
+                <div class="settings-field">
+                    <label>嵌入模型 <span class="field-badge">Embed</span></label>
+                    <select id="embedModelSelect" class="model-select"></select>
+                </div>
+                <div class="settings-field">
+                    <label>Rerank 模型 <span class="field-badge">Rerank</span></label>
+                    <select id="rerankModelSelect" class="model-select"></select>
+                </div>
+                <p class="settings-hint" id="settingsHint"></p>
+                <div class="modal-actions">
+                    <button class="btn btn-secondary" id="settingsCancelBtn">取消</button>
+                    <button class="btn btn-primary" id="settingsSaveBtn">保存并重新加载</button>
+                </div>
+            </div>
+
+            <!-- Tab 内容：参数设置 -->
+            <div class="settings-tab-content" id="tabParamsContent" style="display:none;">
+
+                <div class="params-group">
+                    <h4 class="params-group-title">🔍 检索参数</h4>
+                    <div class="settings-field">
+                        <label>
+                            召回数量 (TOP_K)
+                            <span class="params-hint">向量检索阶段返回的候选文档数</span>
+                        </label>
+                        <div class="params-input-row">
+                            <input type="range" id="topKRange" min="1" max="20" value="10" class="params-range">
+                            <input type="number" id="topKInput" min="1" max="20" value="10" class="params-number">
+                        </div>
+                    </div>
+                    <div class="settings-field">
+                        <label>
+                            精排数量 (RERANK_TOP_K)
+                            <span class="params-hint">Rerank 后送入 LLM 的文档数（不能超过召回数量）</span>
+                        </label>
+                        <div class="params-input-row">
+                            <input type="range" id="rerankTopKRange" min="1" max="10" value="5" class="params-range">
+                            <input type="number" id="rerankTopKInput" min="1" max="10" value="5" class="params-number">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="params-group">
+                    <h4 class="params-group-title">📄 分块参数 <span style="color:var(--warning);font-size:0.78rem;font-weight:400;">（修改后需重新上传文档）</span></h4>
+                    <div class="settings-field">
+                        <label>
+                            分块大小 (CHUNK_SIZE)
+                            <span class="params-hint">每个文档块的最大 token 数</span>
+                        </label>
+                        <div class="params-input-row">
+                            <input type="range" id="chunkSizeRange" min="100" max="1000" step="50" value="500" class="params-range">
+                            <input type="number" id="chunkSizeInput" min="100" max="1000" step="50" value="500" class="params-number">
+                        </div>
+                    </div>
+                    <div class="settings-field">
+                        <label>
+                            分块重叠 (CHUNK_OVERLAP)
+                            <span class="params-hint">相邻分块的重叠 token 数，防止语义断裂</span>
+                        </label>
+                        <div class="params-input-row">
+                            <input type="range" id="chunkOverlapRange" min="0" max="200" step="10" value="50" class="params-range">
+                            <input type="number" id="chunkOverlapInput" min="0" max="200" step="10" value="50" class="params-number">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="params-group">
+                    <h4 class="params-group-title">🧠 生成参数</h4>
+                    <div class="settings-field">
+                        <label>
+                            上下文窗口 (num_ctx)
+                            <span class="params-hint">LLM 可处理的最大 token 数，越大越慢</span>
+                        </label>
+                        <div class="params-input-row">
+                            <input type="range" id="numCtxRange" min="512" max="8192" step="512" value="4096" class="params-range">
+                            <input type="number" id="numCtxInput" min="512" max="8192" step="512" value="4096" class="params-number">
+                        </div>
+                    </div>
+                </div>
+
+                <p class="settings-hint" id="paramsHint"></p>
+                <div class="modal-actions">
+                    <button class="btn btn-secondary" id="paramsCancelBtn">取消</button>
+                    <button class="btn btn-primary" id="paramsSaveBtn">保存参数</button>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- 引入前端交互逻辑脚本，v=2 用于强制浏览器刷新缓存 -->
+    <script src="/static/app.js?v=6"></script>
+
+    <!-- =====================================================
+         Embedding 模型变更警告 Modal：更换嵌入模型时弹出
+         ===================================================== -->
+    <div class="modal-overlay" id="embedWarningModal" style="display:none;">
+        <div class="modal">
+
+            <!-- 警告图标 -->
+            <div class="modal-icon warning">
+                <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                    <line x1="12" y1="9" x2="12" y2="13"></line>
+                    <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                </svg>
+            </div>
+
+            <h3 class="modal-title">⚠️ 重要警告</h3>
+            <h4 style="color: var(--danger); margin: 0 0 12px 0; font-size: 1rem;">检测到 Embedding 模型变更</h4>
+
+            <div class="modal-body" style="text-align: left;">
+                <p style="margin: 8px 0; font-weight: 600;">新模型与旧向量数据不兼容：</p>
+                <ul style="margin: 8px 0 12px 24px; line-height: 1.8;">
+                    <li>向量维度可能不同（768/1024/1536）</li>
+                    <li>语义空间完全不同，无法准确检索</li>
+                    <li>继续使用会导致检索结果完全错误</li>
+                </ul>
+
+                <div style="background: #d1ecf1; border-left: 4px solid #17a2b8; padding: 12px; margin: 12px 0; border-radius: 4px;">
+                    <p style="margin: 0; font-weight: 600; color: #0c5460;">
+                        🔄 系统将自动执行以下操作：
+                    </p>
+                    <p style="margin: 8px 0 0 0; color: #0c5460;">
+                        1. 清空整个向量数据库<br>
+                        2. 加载新的 Embedding 模型<br>
+                        3. <strong>自动重新索引所有已上传的文档</strong>
+                    </p>
+                </div>
+
+                <p style="margin: 12px 0 0 0; font-weight: 600; color: var(--success);">
+                    ✅ 无需手动重新上传文档，系统会自动处理
+                </p>
+            </div>
+
+            <!-- 确认/取消按钮 -->
+            <div class="modal-actions">
+                <button class="btn btn-secondary" id="embedWarningCancelBtn">取消</button>
+                <button class="btn btn-danger" id="embedWarningConfirmBtn">确认并清空向量库</button>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- =====================================================
+         重新索引成功提示 Modal：模型更换后显示
+         ===================================================== -->
+    <div class="modal-overlay" id="reindexSuccessModal" style="display:none;">
+        <div class="modal">
+
+            <!-- 成功图标 -->
+            <div class="modal-icon" style="color: var(--success);">
+                <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                    <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                </svg>
+            </div>
+
+            <h3 class="modal-title">✅ 配置已保存</h3>
+
+            <div class="modal-body" style="text-align: center;">
+                <p style="margin: 12px 0; font-size: 1rem; line-height: 1.8;">
+                    <span style="display: block; margin-bottom: 8px;">🔄 <strong>正在后台使用新模型重新索引所有文档</strong></span>
+                    <span style="display: block; color: var(--text-secondary); font-size: 0.9rem;">
+                        可以在侧边栏查看向量库条目数的变化
+                    </span>
+                </p>
+            </div>
+
+            <!-- 确认按钮 -->
+            <div class="modal-actions">
+                <button class="btn btn-primary" id="reindexSuccessOkBtn">确定</button>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- =====================================================
+         删除确认 Modal 弹窗：删除文档时弹出
+         ===================================================== -->
+    <div class="modal-overlay" id="deleteModal" style="display:none;">
+        <div class="modal">
+
+            <!-- 垃圾桶图标 -->
+            <div class="modal-icon">
+                <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="3 6 5 6 21 6"></polyline>
+                    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
+                    <path d="M10 11v6M14 11v6"></path>
+                    <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path>
+                </svg>
+            </div>
+
+            <h3 class="modal-title">删除文档</h3>
+            <!-- 动态填充待删除的文件名 -->
+            <p class="modal-body" id="deleteModalBody">确定要删除该文档吗？</p>
+            <!-- 操作风险提示 -->
+            <p class="modal-hint">同时会移除该文档在向量库中的所有数据，此操作不可恢复。</p>
+
+            <!-- 确认/取消按钮 -->
+            <div class="modal-actions">
+                <button class="btn btn-secondary" id="deleteCancelBtn">取消</button>
+                <button class="btn btn-danger" id="deleteConfirmBtn">删除</button>
+            </div>
+
+        </div>
+    </div>
+
+</body>
+
+</html>
