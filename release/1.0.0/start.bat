@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul 2>&1
 echo ================================
-echo   Smart Customer Service System
+echo   PonyRAG Knowledge Base System
 echo ================================
 
 REM Check Python
@@ -12,17 +12,25 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [1/4] Changing to backend directory...
-cd /d "%~dp0backend"
+echo [1/3] Locating backend directory...
+REM %~dp0 is the directory where this bat file is located (always relative to the script)
+set "BACKEND_DIR=%~dp0backend"
+
+if not exist "%BACKEND_DIR%" (
+    echo [ERROR] Cannot find backend directory: %BACKEND_DIR%
+    pause
+    exit /b 1
+)
+
+echo [2/3] Changing to backend directory...
+cd /d "%BACKEND_DIR%"
 if errorlevel 1 (
     echo [ERROR] Cannot change to backend directory
     pause
     exit /b 1
 )
 
-
-
-echo [4/4] Starting server...
+echo [3/3] Starting server...
 echo.
 echo ================================
 echo   Server: http://localhost:8001
@@ -33,3 +41,5 @@ echo Press Ctrl+C to stop
 echo.
 
 python app.py
+
+pause
