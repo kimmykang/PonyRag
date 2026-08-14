@@ -12,7 +12,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.138-green?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![ChromaDB](https://img.shields.io/badge/ChromaDB-1.5-purple)](https://www.trychroma.com/)
 [![Ollama](https://img.shields.io/badge/Ollama-Local-orange)](https://ollama.com/)
-[![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 </div>
 
@@ -338,7 +338,7 @@ Ollama 首次加载大模型需要时间（30秒-几分钟），请耐心等待�
 
 ### 📄 开源协议
 
-本项目采用 [MIT License](LICENSE) 开源协议。
+本项目采用 [Apache License 2.0](LICENSE) 开源协议。
 
 ### 👨‍💻 作者
 
@@ -483,9 +483,9 @@ Issues and Pull Requests are welcome!
 4. Push to the branch (`git push origin feature/AmazingFeature`)
 5. Open a Pull Request
 
-### �📄 License
+### 📄 License
 
-This project is licensed under the [MIT License](LICENSE).
+This project is licensed under the [Apache License 2.0](LICENSE).
 
 ### 👨‍💻 Author
 
