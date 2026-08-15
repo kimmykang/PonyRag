@@ -124,6 +124,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     await loadStats();
     loadChatHistory(); // 恢复历史聊天记录
     pollModelStatus();
+    updateOcrModelStatus(); // 初始显示 OCR 模型状态
 });
 
 /**
@@ -402,16 +403,18 @@ async function openSettingsModal() {
     hint.textContent = '';
 
     // 加载模型列表和参数（并行请求）
-    const [statusRes, ollamaRes, paramsRes] = await Promise.all([
+    const [statusRes, ollamaRes, paramsRes, modelsRes] = await Promise.all([
         fetch(`${API_BASE}/api/model-status`).then(r => r.json()).catch(() => ({})),
         fetch(`${API_BASE}/api/ollama/models`).then(r => r.json()).catch(() => ({
             models: []
         })),
         fetch(`${API_BASE}/api/config/rag-params`).then(r => r.json()).catch(() => ({})),
+        fetch(`${API_BASE}/api/models`).then(r => r.json()).catch(() => ({})),
     ]);
 
     const currentModels = statusRes.models || {};
     const allModels = ollamaRes.models || [];
+    const currentOcrModel = modelsRes.ocr_model || '';
 
     function fillSelect(id, currentName) {
         const sel = document.getElementById(id);
@@ -439,6 +442,25 @@ async function openSettingsModal() {
     fillSelect('chatModelSelect', (currentModels.chat && currentModels.chat.model) || '');
     fillSelect('embedModelSelect', (currentModels.embed && currentModels.embed.model) || '');
     fillSelect('rerankModelSelect', (currentModels.rerank && currentModels.rerank.model) || '');
+
+    // OCR 模型下拉：额外加一个"禁用 OCR"选项
+    const ocrSel = document.getElementById('ocrModelSelect');
+    ocrSel.innerHTML = '<option value="">-- 禁用 OCR --</option>';
+    allModels.forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m.name;
+        opt.textContent = m.name;
+        if (m.name === currentOcrModel) opt.selected = true;
+        ocrSel.appendChild(opt);
+    });
+    if (!currentOcrModel) ocrSel.value = '';
+    else if (!allModels.find(m => m.name === currentOcrModel)) {
+        const opt = document.createElement('option');
+        opt.value = currentOcrModel;
+        opt.textContent = currentOcrModel + ' (当前)';
+        opt.selected = true;
+        ocrSel.prepend(opt);
+    }
 
     // 填充参数设置的初始值
     if (paramsRes) {
@@ -521,11 +543,13 @@ async function openSettingsModal() {
         const newChat = document.getElementById('chatModelSelect').value;
         const newEmbed = document.getElementById('embedModelSelect').value;
         const newRerank = document.getElementById('rerankModelSelect').value;
+        const newOcr = document.getElementById('ocrModelSelect').value;
 
         const changed =
             newChat !== ((currentModels.chat && currentModels.chat.model) || '') ||
             newEmbed !== ((currentModels.embed && currentModels.embed.model) || '') ||
-            newRerank !== ((currentModels.rerank && currentModels.rerank.model) || '');
+            newRerank !== ((currentModels.rerank && currentModels.rerank.model) || '') ||
+            newOcr !== currentOcrModel;
 
         if (!changed) {
             hint.textContent = '模型未变更';
@@ -538,14 +562,13 @@ async function openSettingsModal() {
         // 如果 embedding 模型变更，显示警告对话框
         if (embedChanged) {
             showEmbedWarningModal(() => {
-                // 用户确认后执行保存
-                saveModelConfig(newChat, newEmbed, newRerank, hint, closeModal);
+                saveModelConfig(newChat, newEmbed, newRerank, newOcr, hint, closeModal);
             });
             return;
         }
 
         // 其他模型变更直接保存
-        saveModelConfig(newChat, newEmbed, newRerank, hint, closeModal);
+        saveModelConfig(newChat, newEmbed, newRerank, newOcr, hint, closeModal);
     };
 }
 
@@ -672,7 +695,7 @@ function showEmbedWarningModal(onConfirm) {
 /**
  * 保存模型配置到后端
  */
-async function saveModelConfig(chatModel, embedModel, rerankModel, hintElement, closeModalCallback) {
+async function saveModelConfig(chatModel, embedModel, rerankModel, ocrModel, hintElement, closeModalCallback) {
     hintElement.textContent = '正在保存并触发重新加载...';
     document.getElementById('settingsSaveBtn').disabled = true;
 
@@ -685,7 +708,8 @@ async function saveModelConfig(chatModel, embedModel, rerankModel, hintElement, 
             body: JSON.stringify({
                 chat_model: chatModel,
                 embed_model: embedModel,
-                rerank_model: rerankModel
+                rerank_model: rerankModel,
+                ocr_model: ocrModel,
             }),
         });
         const data = await res.json();
@@ -880,11 +904,36 @@ async function pollModelStatus() {
             }, 3000);
             return;
         }
+
+        // 同步更新 OCR 模型状态（只需显示是否配置，不需要轮询）
+        updateOcrModelStatus();
     } catch (e) {
         // 后端未就绪，继续等待
     }
 
     _modelPollTimer = setTimeout(pollModelStatus, 3000);
+}
+
+// OCR 模型状态：从后端读取当前配置，显示模型名或"未启用"
+async function updateOcrModelStatus() {
+    const dot = document.getElementById('ms-ocr-dot');
+    const msg = document.getElementById('ms-ocr-msg');
+    if (!dot || !msg) return;
+    try {
+        const res = await fetch(`${API_BASE}/api/models`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const ocrModel = data.ocr_model || '';
+        if (ocrModel) {
+            dot.style.background = 'var(--success)';
+            msg.textContent = ocrModel.split('/').pop(); // 只显示模型名短名
+        } else {
+            dot.style.background = 'var(--text-secondary)';
+            msg.textContent = '未启用';
+        }
+    } catch (e) {
+        // 忽略
+    }
 }
 
 // ============================================================

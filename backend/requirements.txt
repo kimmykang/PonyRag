@@ -22,6 +22,9 @@ chromadb==1.5.9
 
 # 文档解析
 pypdf==6.13.2                  # PDF 解析
+markitdown>=0.1.0              # 文档转 Markdown（核心依赖）
+markitdown-ocr>=0.1.0          # OCR 插件：图片型 PDF/扫描件文字提取（可选）
+openai>=1.0.0                  # markitdown-ocr 使用 OpenAI 兼容接口（Ollama 本地）
 # docx/doc 解析由 langchain-community 内置依赖提供（docx2txt）
 # .txt / .md 直接使用 TextLoader，无额外依赖
 

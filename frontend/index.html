@@ -143,6 +143,13 @@
                         </button>
                     </div>
 
+                    <!-- OCR 模型状态条目（用于图片型PDF文字提取，按需调用） -->
+                    <div class="model-status-item" id="ms-ocr">
+                        <span class="model-status-dot" id="ms-ocr-dot" style="background: var(--text-secondary);"></span>
+                        <span class="model-status-name">OCR模型</span>
+                        <span class="model-status-msg" id="ms-ocr-msg">未配置</span>
+                    </div>
+
                 </div>
             </div>
 
@@ -325,6 +332,13 @@
                 <div class="settings-field">
                     <label>Rerank 模型 <span class="field-badge">Rerank</span></label>
                     <select id="rerankModelSelect" class="model-select"></select>
+                </div>
+                <div class="settings-field">
+                    <label>OCR 模型 <span class="field-badge" style="background:#f59e0b;">OCR</span></label>
+                    <p style="margin: 4px 0 8px; font-size: 0.82rem; color: var(--text-secondary);">
+                        用于提取图片型 PDF / 扫描件文字，需选择支持视觉输入的模型。留空则禁用 OCR。
+                    </p>
+                    <select id="ocrModelSelect" class="model-select"></select>
                 </div>
                 <p class="settings-hint" id="settingsHint"></p>
                 <div class="modal-actions">

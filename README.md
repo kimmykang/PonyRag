@@ -113,6 +113,7 @@
 #### 4. 模型管理
 - ✅ 在线切换对话模型
 - ✅ 在线切换 Embedding 模型（自动重建索引）
+- ✅ 在线切换 OCR 视觉模型（用于图片型 PDF / 扫描件）
 - ✅ 调整检索参数（TOP-K、Rerank-TOP-K 等）
 - ✅ 实时显示模型加载状态
 
@@ -139,6 +140,11 @@ pip install -r requirements.txt
 pip install markitdown
 ```
 
+**2.1 可选：安装 OCR 支持**（用于图片型 PDF / 扫描件文字提取）
+```bash
+pip install markitdown-ocr openai
+```
+
 **3. 安装 Ollama 并下载模型**
 
 访问 [https://ollama.com](https://ollama.com) 下载并安装 Ollama
@@ -153,6 +159,9 @@ ollama pull qwen3-embedding:4b
 
 # Rerank 模型
 ollama pull qllama/bge-reranker-v2-m3:f16
+
+# OCR 视觉模型（可选，用于图片型 PDF / 扫描件）
+ollama pull qwen2.5vl:7b
 ```
 
 **4. 启动服务**
@@ -211,8 +220,9 @@ OLLAMA_BASE_URL=http://localhost:11434
 
 # 模型配置
 CHAT_MODEL=qwen3.6:27b                      # 对话模型
-EMBED_MODEL=qwen3-embedding:4b               # 嵌入模型
+EMBED_MODEL=qwen3-embedding:4b               # 嵌入模型（⚠️ 切换后需重建向量库）
 RERANK_MODEL=qllama/bge-reranker-v2-m3:f16  # Rerank 模型
+OCR_MODEL=qwen2.5vl:7b                                   # OCR 视觉模型（留空禁用，如 qwen2.5vl:7b）
 
 # RAG 参数
 TOP_K=6                # 向量检索召回数量
@@ -277,13 +287,20 @@ ponyrag/
 
 **Q: 启动后模型一直显示「加载中」？**
 
-Ollama 首次加载大模型需要时间（30秒-几分钟），请耐心等待。可在 Ollama 终端查看加载进度。
+Ollama 首次加载大模型需要时间（30秒-几分钟），请耐心等待。可在 Ollama 终端查看加载进度。侧边栏每个模型旁有刷新按钮，超时后可手动重试。
 
 **Q: 提问返回「知识库中暂无相关内容」？**
 
 - 确认知识库已上传文档且向量库条目数 > 0
 - 检查知识库是否已启用
 - 若刚切换 Embedding 模型，等待重新索引完成
+
+**Q: 如何处理图片型 PDF / 扫描件？**
+
+1. 安装 OCR 依赖：`pip install markitdown-ocr openai`
+2. 在 Ollama 中拉取支持视觉输入的模型，如 `ollama pull qwen2.5vl:7b`
+3. 在前端设置页面「OCR 模型」下拉框选择该模型并保存
+4. 再次上传 PDF，系统会自动识别图片文字
 
 **Q: 如何提升检索速度？**
 
@@ -293,11 +310,11 @@ Ollama 首次加载大模型需要时间（30秒-几分钟），请耐心等待�
 
 **Q: 支持哪些文档格式？**
 
-目前支持：PDF、DOCX、XLSX、PPTX、TXT、MD、CSV
+目前支持：PDF、DOCX、XLSX、PPTX、TXT、MD
 
 **Q: 切换 Embedding 模型后提示维度不匹配？**
 
-不同模型输出维度不同。系统会自动检测并提示重建向量库，确认后会自动删除旧数据并重新索引。
+不同模型输出维度不同。系统会自动检测并清空旧向量库，重启后自动重新索引。⚠️ 建议不要频繁切换 Embedding 模型。
 
 ### ⚡ 性能优化建议
 
@@ -320,6 +337,7 @@ Ollama 首次加载大模型需要时间（30秒-几分钟），请耐心等待�
 - [x] 多轮对话历史
 - [x] 模型热切换
 - [x] 参数动态调整
+- [x] 图片型 PDF OCR 支持（基于 Ollama 视觉模型）
 - [ ] 文档在线预览
 - [ ] 导出聊天记录
 - [ ] 多用户权限管理
@@ -361,7 +379,7 @@ Ollama 首次加载大模型需要时间（30秒-几分钟），请耐心等待�
 - 🗄️ **Multiple Knowledge Bases** — Create, enable/disable multiple independent knowledge bases
 - 🎨 **Modern UI** — Responsive web interface for mobile and desktop
 - ⚡ **High Performance** — ChromaDB vector storage with millisecond-level response
-- 🔄 **Hot Model Swapping** — Switch LLM/Embedding/Rerank models on-the-fly
+- 🔄 **Hot Model Swapping** — Switch LLM/Embedding/Rerank/OCR models on-the-fly
 
 ### 🏗️ Tech Stack
 
@@ -395,6 +413,11 @@ pip install -r requirements.txt
 pip install markitdown
 ```
 
+**2.1 Optional: Install OCR support** (for scanned PDFs / image-only documents)
+```bash
+pip install markitdown-ocr openai
+```
+
 **3. Install Ollama and download models**
 
 Visit [https://ollama.com](https://ollama.com) to download and install Ollama
@@ -409,6 +432,9 @@ ollama pull qwen3-embedding:4b
 
 # Rerank model
 ollama pull qllama/bge-reranker-v2-m3:f16
+
+# OCR vision model (optional, for scanned PDFs)
+ollama pull qwen2.5vl:7b
 ```
 
 **4. Start the service**
@@ -455,8 +481,9 @@ OLLAMA_BASE_URL=http://localhost:11434
 
 # Model configuration
 CHAT_MODEL=qwen3.6:27b                      # Chat model
-EMBED_MODEL=qwen3-embedding:4b               # Embedding model
+EMBED_MODEL=qwen3-embedding:4b               # Embedding model (⚠️ rebuild index on change)
 RERANK_MODEL=qllama/bge-reranker-v2-m3:f16  # Rerank model
+OCR_MODEL=qwen2.5vl:7b                                   # OCR vision model (leave empty to disable, e.g. qwen2.5vl:7b)
 
 # RAG parameters
 TOP_K=6                # Vector search recall count

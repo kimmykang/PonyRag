@@ -5,14 +5,15 @@
 
 完整上传流程：
   1. 用户上传原始文件（PDF / DOCX / XLSX / PPTX / TXT / MD）
-  2. 调用系统命令 `markitdown` 将原始文件转换为 .md 格式
-     - 原始文件保留在 uploads 目录，便于追溯
+  2. 调用 markitdown Python API 将原始文件转换为 .md 格式
+     - 若配置了 OCR_MODEL，启用 markitdown-ocr 插件，自动 OCR 图片型文档
      - 若源文件本身是 .md，跳过转换
   3. 以生成的 .md 文件为标的，使用 tiktoken 分块
   4. 将分块结果写入 ChromaDB 向量库（由 vector_store.py 完成）
 
 依赖：
-  - markitdown CLI：pip install markitdown
+  - markitdown：pip install markitdown
+  - markitdown-ocr（可选）：pip install markitdown-ocr openai
   - langchain-community TextLoader：读取 .md 文本
   - langchain-text-splitters：文档分块
 """
@@ -22,7 +23,7 @@ from typing import List
 
 from langchain_community.document_loaders import TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from config import CHUNK_SIZE, CHUNK_OVERLAP, UPLOAD_DIR
+from config import CHUNK_SIZE, CHUNK_OVERLAP, UPLOAD_DIR, OLLAMA_BASE_URL, OCR_MODEL
 
 # ──────────────────────────────────────────────────────────────
 # 支持的文件格式集合
@@ -44,12 +45,16 @@ ALLOWED_EXTENSIONS = _MD_NATIVE | _CONVERTIBLE
 
 def convert_to_md(src_path: str) -> str:
     """
-    调用 markitdown CLI 将原始文件转换为同名 .md 文件，保存在同目录下。
+    将原始文件转换为同名 .md 文件，保存在同目录下。
 
-    转换规则：
-      - 若源文件已是 .md，直接返回源路径（无需转换）
-      - 若同名 .md 已存在，直接复用（幂等，避免重复转换）
-      - 否则执行 markitdown <src> -o <src>.md
+    转换策略：
+      1. 若源文件已是 .md，直接返回
+      2. 若同名 .md 已存在，直接复用（幂等）
+      3. 优先使用 markitdown Python API 转换：
+         - 若配置了 OCR_MODEL，启用 markitdown-ocr 插件，
+           自动对图片型 PDF/扫描件进行 OCR
+         - OCR 使用本地 Ollama（OpenAI 兼容接口），无需联网
+      4. Python API 失败时回退到 CLI 命令行
 
     Args:
         src_path: 原始文件的绝对路径
@@ -58,7 +63,7 @@ def convert_to_md(src_path: str) -> str:
         生成的 .md 文件路径（字符串）
 
     Raises:
-        RuntimeError: markitdown 未安装、转换失败或未生成输出文件
+        RuntimeError: 转换失败且回退也失败
     """
     src = Path(src_path)
 
@@ -72,22 +77,61 @@ def convert_to_md(src_path: str) -> str:
     if md_path.exists():
         return str(md_path)
 
+    # ── 优先：Python API（支持 OCR）────────────────────────────
+    try:
+        from markitdown import MarkItDown
+
+        if OCR_MODEL:
+            # 使用 Ollama 本地视觉模型做 OCR
+            try:
+                from openai import OpenAI
+                ollama_client = OpenAI(
+                    base_url=f"{OLLAMA_BASE_URL}/v1",
+                    api_key="ollama",  # Ollama 不校验 key，填任意值即可
+                )
+                md_converter = MarkItDown(
+                    enable_plugins=True,
+                    llm_client=ollama_client,
+                    llm_model=OCR_MODEL,
+                )
+                print(f"[Convert] 使用 OCR 模型 {OCR_MODEL} 转换: {src.name}")
+            except ImportError:
+                # openai 或 markitdown-ocr 未安装，回退到普通转换
+                print(f"[Convert] markitdown-ocr 或 openai 未安装，跳过 OCR")
+                md_converter = MarkItDown()
+        else:
+            md_converter = MarkItDown()
+
+        result = md_converter.convert(str(src))
+        text = result.text_content or ""
+
+        if not text.strip():
+            raise RuntimeError("markitdown Python API 返回空内容")
+
+        md_path.write_text(text, encoding="utf-8")
+        print(f"[Convert] Python API 转换成功: {src.name} → {md_path.name}")
+        return str(md_path)
+
+    except Exception as e:
+        print(f"[Convert] Python API 失败，尝试 CLI 回退: {e}")
+
+    # ── 回退：CLI 命令行 ────────────────────────────────────────
     try:
         result = subprocess.run(
             ["markitdown", str(src), "-o", str(md_path)],
-            capture_output=True,   # 捕获 stdout/stderr
+            capture_output=True,
             text=True,
-            timeout=120,           # 最多等 2 分钟，防止大文件卡死
+            timeout=120,
         )
         if result.returncode != 0:
             raise RuntimeError(
-                f"markitdown 转换失败 (exit {result.returncode}): {result.stderr.strip()}"
+                f"markitdown CLI 失败 (exit {result.returncode}): {result.stderr.strip()}"
             )
         if not md_path.exists():
-            raise RuntimeError(f"markitdown 未生成输出文件: {md_path}")
+            raise RuntimeError("markitdown CLI 未生成输出文件")
+        print(f"[Convert] CLI 转换成功: {src.name} → {md_path.name}")
         return str(md_path)
     except FileNotFoundError:
-        # 系统 PATH 里找不到 markitdown 命令
         raise RuntimeError("markitdown 命令未找到，请先安装: pip install markitdown")
 
 

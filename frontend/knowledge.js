@@ -847,6 +847,26 @@ function showUploadResult(succeeded, total, failed, skippedFiles) {
     modal.style.display = 'flex';
 }
 
+// 删除确认 Modal 辅助
+function closeDeleteDocModal() {
+    document.getElementById('deleteDocModal').style.display = 'none';
+}
+
+function showDeleteDocModal(bodyText, onConfirm) {
+    document.getElementById('deleteDocModalBody').textContent = bodyText;
+
+    // 重新绑定确认按钮，避免重复监听
+    const btn = document.getElementById('deleteDocConfirmBtn');
+    const newBtn = btn.cloneNode(true);
+    btn.replaceWith(newBtn);
+    newBtn.addEventListener('click', () => {
+        closeDeleteDocModal();
+        onConfirm(); // 直接用闭包里的 onConfirm，不依赖 _deleteDocCallback
+    });
+
+    document.getElementById('deleteDocModal').style.display = 'flex';
+}
+
 // 批量删除文档
 async function handleBatchDelete() {
     if (state.selectedDocs.size === 0) return;
@@ -856,49 +876,46 @@ async function handleBatchDelete() {
     if (!kb) return;
 
     const count = state.selectedDocs.size;
-    const fileList = Array.from(state.selectedDocs).map(name => `  • ${name}`).join('\n');
+    const fileList = Array.from(state.selectedDocs).map(name => `• ${name}`).join('\n');
+    const bodyText = `确定要删除知识库「${kb.name}」中的 ${count} 个文档？\n\n${fileList}`;
 
-    if (!confirm(`确定要删除知识库「${kb.name}」中的 ${count} 个文档吗？\n\n${fileList}\n\n此操作不可恢复。`)) {
-        return;
-    }
+    showDeleteDocModal(bodyText, async () => {
+        const btn = document.getElementById('docsBatchDeleteBtn');
+        const text = document.getElementById('docsBatchDeleteText');
+        const originalText = text.textContent;
 
-    const btn = document.getElementById('docsBatchDeleteBtn');
-    const text = document.getElementById('docsBatchDeleteText');
-    const originalText = text.textContent;
+        btn.disabled = true;
+        text.textContent = '删除中...';
 
-    btn.disabled = true;
-    text.textContent = '删除中...';
+        try {
+            const deletePromises = Array.from(state.selectedDocs).map(filename =>
+                fetch(`${API_BASE}/api/documents/${encodeURIComponent(filename)}?kb_id=${encodeURIComponent(kbId)}`, {
+                    method: 'DELETE',
+                })
+            );
 
-    try {
-        const deletePromises = Array.from(state.selectedDocs).map(filename =>
-            fetch(`${API_BASE}/api/documents/${encodeURIComponent(filename)}?kb_id=${encodeURIComponent(kbId)}`, {
-                method: 'DELETE',
-            })
-        );
+            const results = await Promise.all(deletePromises);
+            const failures = results.filter(res => !res.ok);
+            if (failures.length > 0) {
+                throw new Error(`${failures.length} 个文档删除失败`);
+            }
 
-        const results = await Promise.all(deletePromises);
+            state.selectedDocs.clear();
+            await loadDocuments(kbId);
+            await updateStats();
 
-        const failures = results.filter(res => !res.ok);
-        if (failures.length > 0) {
-            throw new Error(`${failures.length} 个文档删除失败`);
-        }
+            text.textContent = '删除成功！';
+            setTimeout(() => {
+                text.textContent = originalText;
+                btn.disabled = false;
+            }, 2000);
 
-        state.selectedDocs.clear();
-        await loadDocuments(kbId);
-        await updateStats(); // 刷新统计数据
-
-        text.textContent = '删除成功！';
-        setTimeout(() => {
+        } catch (e) {
+            console.error('批量删除失败:', e);
             text.textContent = originalText;
             btn.disabled = false;
-        }, 2000);
-
-    } catch (e) {
-        console.error('批量删除失败:', e);
-        alert(`批量删除失败: ${e.message}`);
-        text.textContent = originalText;
-        btn.disabled = false;
-    }
+        }
+    });
 }
 
 // 单个删除文档
@@ -907,29 +924,21 @@ async function deleteSingleDocument(filename) {
     const kb = state.knowledgeBases.find(k => k.kb_id === kbId);
     if (!kb) return;
 
-    if (!confirm(`确定要删除文档「${filename}」吗？\n\n此操作不可恢复。`)) {
-        return;
-    }
-
-    try {
-        const res = await fetch(`${API_BASE}/api/documents/${encodeURIComponent(filename)}?kb_id=${encodeURIComponent(kbId)}`, {
-            method: 'DELETE',
-        });
-
-        const data = await res.json();
-
-        if (!res.ok) {
-            throw new Error(data.detail || data.message || '删除失败');
+    showDeleteDocModal(`确定要删除文档「${filename}」吗？`, async () => {
+        try {
+            const res = await fetch(`${API_BASE}/api/documents/${encodeURIComponent(filename)}?kb_id=${encodeURIComponent(kbId)}`, {
+                method: 'DELETE',
+            });
+            const data = await res.json();
+            if (!res.ok) {
+                throw new Error(data.detail || data.message || '删除失败');
+            }
+            await loadDocuments(kbId);
+            await updateStats();
+        } catch (e) {
+            console.error('删除文档失败:', e);
         }
-
-        console.log(`文档 ${filename} 删除成功，移除了 ${data.vectors_removed} 个向量`);
-        await loadDocuments(kbId);
-        await updateStats(); // 刷新统计数据
-
-    } catch (e) {
-        console.error('删除文档失败:', e);
-        alert(`删除失败: ${e.message}`);
-    }
+    });
 }
 
 // 关闭上传结果弹窗，并刷新文档列表
@@ -959,6 +968,7 @@ window.toggleDocSelection = toggleDocSelection;
 window.toggleSelectAll = toggleSelectAll;
 window.deleteSingleDocument = deleteSingleDocument;
 window.closeUploadResult = closeUploadResult;
+window.closeDeleteDocModal = closeDeleteDocModal;
 
 // 测试函数：直接打开弹窗
 window.testModalOpen = function() {

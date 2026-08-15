@@ -38,6 +38,10 @@ EMBED_MODEL: str = os.getenv("EMBED_MODEL", "qwen3-embedding:4b")
 # Rerank 模型：对检索结果精排，提升最终上下文质量
 RERANK_MODEL: str = os.getenv("RERANK_MODEL", "MedAIBase/Qwen3-VL-Reranker:2b")
 
+# OCR 视觉模型：用于提取图片型 PDF / 扫描件中的文字（需支持视觉输入）
+# 留空则禁用 OCR，markitdown 退回普通文本提取
+OCR_MODEL: str = os.getenv("OCR_MODEL", "qwen3.6:27b")
+
 # ──────────────────────────────────────────────────────────────
 # 存储路径配置
 # ──────────────────────────────────────────────────────────────

@@ -62,7 +62,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from config import HOST, PORT, UPLOAD_DIR, VECTOR_DB_PATH, OLLAMA_BASE_URL, CHAT_MODEL, EMBED_MODEL, RERANK_MODEL
+from config import HOST, PORT, UPLOAD_DIR, VECTOR_DB_PATH, OLLAMA_BASE_URL, CHAT_MODEL, EMBED_MODEL, RERANK_MODEL, OCR_MODEL
 from document_processor import (
     parse_document, chunk_texts, upload_file, list_documents, cleanup_document,
     convert_to_md, ALLOWED_EXTENSIONS,
@@ -328,6 +328,7 @@ class ModelInfo(BaseModel):
     chat_model: str
     embed_model: str
     rerank_model: str
+    ocr_model: str
     ollama_url: str
 
 
@@ -336,6 +337,7 @@ class ModelConfigRequest(BaseModel):
     chat_model: str    # 新的对话模型名
     embed_model: str   # 新的嵌入模型名
     rerank_model: str  # 新的 Rerank 模型名
+    ocr_model: str = ""  # 新的 OCR 视觉模型名（可空）
 
 
 class KBCreateRequest(BaseModel):
@@ -1059,6 +1061,7 @@ async def get_model_info():
         chat_model=CHAT_MODEL,
         embed_model=EMBED_MODEL,
         rerank_model=RERANK_MODEL,
+        ocr_model=OCR_MODEL,
         ollama_url=OLLAMA_BASE_URL,
     )
 
@@ -1213,12 +1216,12 @@ async def save_config(req: ModelConfigRequest):
     import config as _cfg
     
     # 检测各模型是否变更
-    chat_changed  = req.chat_model   != _cfg.CHAT_MODEL
-    embed_changed = req.embed_model  != _cfg.EMBED_MODEL
+    chat_changed   = req.chat_model   != _cfg.CHAT_MODEL
+    embed_changed  = req.embed_model  != _cfg.EMBED_MODEL
     rerank_changed = req.rerank_model != _cfg.RERANK_MODEL
-    changed_keys  = (["chat"]   if chat_changed   else []) + \
-                    (["embed"]  if embed_changed  else []) + \
-                    (["rerank"] if rerank_changed else [])
+    changed_keys   = (["chat"]   if chat_changed   else []) + \
+                     (["embed"]  if embed_changed  else []) + \
+                     (["rerank"] if rerank_changed else [])
     
     vectors_cleared = False
     docs_reindexed = 0
@@ -1285,12 +1288,14 @@ async def save_config(req: ModelConfigRequest):
             "CHAT_MODEL":   req.chat_model,
             "EMBED_MODEL":  req.embed_model,
             "RERANK_MODEL": req.rerank_model,
+            "OCR_MODEL":    req.ocr_model,
         }
     )
     # 运行时更新 config 模块全局变量
     _cfg.CHAT_MODEL   = req.chat_model
     _cfg.EMBED_MODEL  = req.embed_model
     _cfg.RERANK_MODEL = req.rerank_model
+    _cfg.OCR_MODEL    = req.ocr_model
 
     # 销毁所有 RAG 引擎缓存，下次请求会用新配置重新初始化
     _invalidate_rag_engines()
