@@ -917,6 +917,49 @@ body {
     white-space: nowrap;
 }
 
+/* 模型状态行：刷新按钮 */
+.model-reload-btn {
+    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0.5;
+    transition: opacity 0.2s, background 0.2s;
+}
+
+.model-reload-btn:hover {
+    opacity: 1;
+    background: var(--bg-secondary, #f0f0f0);
+    color: var(--primary);
+}
+
+.model-reload-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.3;
+}
+
+.model-reload-btn.spinning svg {
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+    from {
+        transform: rotate(0deg);
+    }
+
+    to {
+        transform: rotate(360deg);
+    }
+}
+
 @keyframes pulse {
 
     0%,
@@ -1583,7 +1626,21 @@ body {
 }
 
 .docs-toolbar .btn {
-    min-width: auto;
+    flex: 1;
+    min-width: 0;
+    justify-content: center;
+}
+
+/* 上传目录按钮 */
+.btn-folder {
+    background: #f59e0b;
+    color: white;
+    border: none;
+    justify-content: center;
+}
+
+.btn-folder:hover {
+    background: #d97706;
 }
 
 /* 文档列表 */

@@ -107,6 +107,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const savedKbId = localStorage.getItem('current_kb_id');
     if (savedKbId) {
         state.currentKbId = savedKbId;
+        state.selectedKbIds = [savedKbId]; // 同步到聊天用的知识库选择
         localStorage.removeItem('current_kb_id');
     }
 
@@ -170,6 +171,8 @@ function initEventListeners() {
                 state.selectedKbIds = [value]; // 选择单个知识库
             }
             console.log('[chatKbSelect] 选择的知识库:', state.selectedKbIds);
+            // 切换知识库时刷新统计数字
+            loadStats();
         });
     }
 
@@ -284,6 +287,14 @@ function renderChatKbSelector() {
     ).join('');
 
     select.innerHTML = options;
+
+    // 如果是从知识库管理页跳转过来，设置对应选项为选中
+    if (state.selectedKbIds && state.selectedKbIds.length === 1) {
+        const targetId = state.selectedKbIds[0];
+        if (enabledKbs.find(kb => kb.kb_id === targetId)) {
+            select.value = targetId;
+        }
+    }
 }
 
 // ============================================================
@@ -584,6 +595,44 @@ function setParamValue(name, value) {
             rangeEl.value = inputEl.value;
         });
         rangeEl._bound = true;
+    }
+}
+
+/**
+ * 手动重新加载指定模型（用于超时或加载失败后重试）
+ * @param {string} modelKey - "chat" | "embed" | "rerank"
+ */
+async function reloadModel(modelKey) {
+    // 找到对应的刷新按钮，加旋转动画
+    const item = document.getElementById(`ms-${modelKey}`);
+    const btn = item && item.querySelector('.model-reload-btn');
+    const dot = item && item.querySelector('.model-status-dot');
+    const msg = item && item.querySelector('.model-status-msg');
+
+    if (btn) {
+        btn.disabled = true;
+        btn.classList.add('spinning');
+    }
+    if (dot) dot.className = 'model-status-dot checking';
+    if (msg) msg.textContent = '重新加载中...';
+
+    try {
+        const res = await fetch(`${API_BASE}/api/reload-model/${modelKey}`, {
+            method: 'POST'
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || '请求失败');
+        if (msg) msg.textContent = data.message || '加载中...';
+        // 重置轮询标志，让 pollModelStatus 继续轮询直到就绪
+        _allModelsReady = false;
+    } catch (e) {
+        if (msg) msg.textContent = `重载失败: ${e.message}`;
+        if (dot) dot.className = 'model-status-dot error';
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.classList.remove('spinning');
+        }
     }
 }
 
@@ -968,8 +1017,11 @@ async function handleFileUpload(e) {
 
 async function loadStats() {
     try {
-        // 聊天页面显示所有知识库的总和统计
-        const kbIdParam = 'all';
+        // 根据当前选中的知识库加载对应统计
+        // selectedKbIds 为 null 时显示所有知识库总和，为单个 ID 时显示该知识库
+        const kbIdParam = (state.selectedKbIds && state.selectedKbIds.length === 1) ?
+            state.selectedKbIds[0] :
+            'all';
         console.log('[loadStats] 请求统计信息，知识库ID:', kbIdParam);
         const res = await fetch(`${API_BASE}/api/stats?kb_id=${kbIdParam}`);
 

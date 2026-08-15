@@ -209,20 +209,20 @@ def upload_file(file, filename: str = None, upload_dir: str = None) -> str:
 
 def list_documents(upload_dir: str = None) -> List[dict]:
     """
-    列出指定 uploads 目录中已上传的原始文档。
+    列出指定 uploads 目录中已上传并转换完成的文档。
 
-    过滤规则：
-      - 跳过隐藏文件（以 . 开头，如 .indexed）
-      - 跳过不在 ALLOWED_EXTENSIONS 中的文件类型
-      - 跳过"转换产物"：若一个 .md 文件存在同名的原始文件（.pdf/.docx 等），
-        则该 .md 是由 markitdown 自动生成的，不单独列出
+    展示策略：
+      - 以 .md 文件为准（所有文档最终都转为 .md 入库）
+      - 若某 .md 存在同名原始文件（.pdf/.docx 等），显示原始文件名（更直观）
+      - 若只有 .md（原生 md 上传，或原始文件已删除），显示 .md 文件名
+      - 跳过隐藏文件（以 . 开头）
 
     每条记录包含：
-      filename   : 文件名
+      filename   : 展示用文件名（优先原始文件名，其次 .md 文件名）
       size       : 文件大小（字节）
       created    : 创建时间戳
-      md_ready   : 是否已有对应 .md 文件（即已完成转换）
-      md_filename: 对应 .md 文件名（若存在）
+      md_ready   : 始终为 True（列出的都是已有 .md 的文档）
+      md_filename: 对应 .md 文件名
 
     Args:
         upload_dir: 上传目录路径，默认使用 config.UPLOAD_DIR
@@ -232,40 +232,60 @@ def list_documents(upload_dir: str = None) -> List[dict]:
     """
     if upload_dir is None:
         upload_dir = UPLOAD_DIR
-    
-    docs = []
+
     upload_path = Path(upload_dir)
     if not upload_path.exists():
-        return docs
+        return []
 
-    for f in upload_path.iterdir():
+    docs = []
+    seen_stems = set()  # 防止同一文档重复出现
+
+    for f in sorted(upload_path.iterdir()):
         if not f.is_file():
             continue
-        # 跳过隐藏文件（.indexed 等系统文件）
         if f.name.startswith("."):
             continue
+
         ext = f.suffix.lower()
         if ext not in ALLOWED_EXTENSIONS:
             continue
 
-        # 判断该 .md 是否是转换产物（存在同名原始文件）
-        if ext == ".md":
-            has_source = any(
-                (upload_path / (f.stem + orig_ext)).exists()
-                for orig_ext in (".pdf", ".docx", ".doc", ".txt", ".xlsx", ".xls", ".pptx", ".ppt")
-            )
-            if has_source:
-                continue  # 转换产物，不单独列出，避免列表重复
+        stem = f.stem
 
-        # 检查是否已有对应的 .md 文件
-        md_file = upload_path / (f.stem + ".md")
-        docs.append({
-            "filename":    f.name,
-            "size":        f.stat().st_size,
-            "created":     f.stat().st_ctime,
-            "md_ready":    md_file.exists(),         # True 表示已转换，可直接入库
-            "md_filename": md_file.name if md_file.exists() else None,
-        })
+        if ext == ".md":
+            # .md 文件：直接列出
+            if stem in seen_stems:
+                continue
+            # 检查是否存在同名原始文件（用原始文件名展示更直观）
+            display_name = f.name
+            for orig_ext in (".pdf", ".docx", ".doc", ".txt", ".xlsx", ".xls", ".pptx", ".ppt"):
+                orig = upload_path / (stem + orig_ext)
+                if orig.exists():
+                    display_name = orig.name
+                    break
+            seen_stems.add(stem)
+            docs.append({
+                "filename":    display_name,
+                "size":        f.stat().st_size,
+                "created":     f.stat().st_ctime,
+                "md_ready":    True,
+                "md_filename": f.name,
+            })
+        else:
+            # 原始文件（pdf/docx 等）：只在没有同名 .md 时列出（转换失败的情况）
+            if stem in seen_stems:
+                continue
+            md_file = upload_path / (stem + ".md")
+            if md_file.exists():
+                continue  # 已有 .md，会在上面的 .md 分支处理
+            seen_stems.add(stem)
+            docs.append({
+                "filename":    f.name,
+                "size":        f.stat().st_size,
+                "created":     f.stat().st_ctime,
+                "md_ready":    False,
+                "md_filename": None,
+            })
 
     return docs
 

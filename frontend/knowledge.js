@@ -90,6 +90,10 @@ function initEventListeners() {
         document.getElementById('docsFileInput').click();
     });
     document.getElementById('docsFileInput').addEventListener('change', handleDocsUpload);
+    document.getElementById('docsFolderBtn').addEventListener('click', () => {
+        document.getElementById('docsFolderInput').click();
+    });
+    document.getElementById('docsFolderInput').addEventListener('change', handleDocsUpload);
     document.getElementById('docsBatchDeleteBtn').addEventListener('click', handleBatchDelete);
     document.getElementById('docsModal').addEventListener('click', (e) => {
         if (e.target.id === 'docsModal') closeDocsModal();
@@ -684,28 +688,66 @@ function updateBatchDeleteBtn() {
     text.textContent = count > 0 ? `批量删除 (${count})` : '批量删除';
 }
 
-// 处理文档上传
+// 支持的文件扩展名
+const ALLOWED_EXTS = new Set(['.pdf', '.docx', '.doc', '.txt', '.md', '.xlsx', '.xls', '.pptx', '.ppt']);
+
+// 处理文档上传（文件选择 或 目录选择 共用）
 async function handleDocsUpload(event) {
-    const files = event.target.files;
-    if (!files || files.length === 0) return;
+    const allFiles = Array.from(event.target.files || []);
+    if (allFiles.length === 0) return;
 
     const kbId = state.currentDocsKbId;
     if (!kbId) return;
+
+    // 过滤出支持的文件类型（目录选择时可能包含图片/隐藏文件等）
+    const skippedFiles = []; // { name, reason }
+    const files = allFiles.filter(f => {
+        const ext = '.' + f.name.split('.').pop().toLowerCase();
+        const relPath = f.webkitRelativePath || '';
+        const displayName = relPath || f.name;
+        // 过滤隐藏文件（文件名以 . 开头）
+        if (f.name.startsWith('.')) return false;
+        // 过滤 Office 临时锁定文件（~$ 开头）
+        if (f.name.startsWith('~$')) return false;
+        // 过滤隐藏目录下的文件（路径含以 . 开头的目录段，如 .git/）
+        if (relPath && relPath.split('/').some(seg => seg.startsWith('.'))) return false;
+        // 过滤不支持的扩展名，并记录文件名
+        if (!ALLOWED_EXTS.has(ext)) {
+            skippedFiles.push({
+                name: displayName,
+                reason: `不支持的格式 (${ext || '无扩展名'})`
+            });
+            return false;
+        }
+        return true;
+    });
+
+    if (files.length === 0) {
+        showUploadResult(0, 0, [], skippedFiles);
+        event.target.value = '';
+        return;
+    }
 
     const uploadProgress = document.getElementById('docsUploadProgress');
     const progressFill = document.getElementById('docsProgressFill');
     const progressText = document.getElementById('docsProgressText');
 
     uploadProgress.style.display = 'block';
+    progressFill.style.width = '0%';
+    progressText.style.color = '';
 
-    try {
-        for (let i = 0; i < files.length; i++) {
-            const file = files[i];
+    const failed = []; // { name, reason }
+    let succeeded = 0;
+
+    for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const pct = Math.round((i / files.length) * 100);
+        progressFill.style.width = `${pct}%`;
+        progressText.textContent = `(${i + 1}/${files.length}) ${file.name}`;
+
+        try {
             const formData = new FormData();
             formData.append('file', file);
-
-            progressText.textContent = `上传中... (${i + 1}/${files.length}) ${file.name}`;
-            progressFill.style.width = `${((i) / files.length) * 100}%`;
 
             const res = await fetch(`${API_BASE}/api/upload?kb_id=${encodeURIComponent(kbId)}`, {
                 method: 'POST',
@@ -715,35 +757,94 @@ async function handleDocsUpload(event) {
             const data = await res.json();
 
             if (!res.ok) {
-                throw new Error(`上传 ${file.name} 失败: ${data.detail || data.message}`);
+                failed.push({
+                    name: file.name,
+                    reason: data.detail || data.message || `HTTP ${res.status}`
+                });
+            } else {
+                succeeded++;
             }
-
-            progressFill.style.width = `${((i + 1) / files.length) * 100}%`;
+        } catch (e) {
+            failed.push({
+                name: file.name,
+                reason: '网络错误: ' + e.message
+            });
         }
-
-        progressText.textContent = '上传完成！';
-
-        await loadDocuments(kbId);
-        await updateStats(); // 刷新统计数据
-
-        setTimeout(() => {
-            uploadProgress.style.display = 'none';
-            progressFill.style.width = '0%';
-        }, 2000);
-
-    } catch (e) {
-        console.error('上传失败:', e);
-        progressText.textContent = `上传失败: ${e.message}`;
-        progressText.style.color = 'var(--danger)';
-
-        setTimeout(() => {
-            uploadProgress.style.display = 'none';
-            progressFill.style.width = '0%';
-            progressText.style.color = '';
-        }, 3000);
-    } finally {
-        event.target.value = '';
     }
+
+    progressFill.style.width = '100%';
+    progressText.textContent = failed.length === 0 ?
+        `上传完成！共 ${succeeded} 个文件` :
+        `完成：${succeeded} 成功，${failed.length} 失败`;
+
+    if (failed.length > 0) {
+        progressText.style.color = 'var(--warning, #f59e0b)';
+    }
+
+    await loadDocuments(kbId);
+    await updateStats();
+
+    setTimeout(() => {
+        uploadProgress.style.display = 'none';
+        progressFill.style.width = '0%';
+        progressText.style.color = '';
+        // 有失败或有被类型过滤的文件时弹出结果弹窗
+        if (failed.length > 0 || skippedFiles.length > 0) {
+            showUploadResult(succeeded, files.length, failed, skippedFiles);
+        }
+    }, 1500);
+
+    event.target.value = '';
+}
+
+// 显示上传结果弹窗
+function showUploadResult(succeeded, total, failed, skippedFiles) {
+    const modal = document.getElementById('uploadResultModal');
+    const title = document.getElementById('uploadResultTitle');
+    const summary = document.getElementById('uploadResultSummary');
+    const failedList = document.getElementById('uploadFailedList');
+    const failedItems = document.getElementById('uploadFailedItems');
+
+    if (failed.length === 0 && skippedFiles.length === 0) return;
+
+    const hasIssues = failed.length > 0 || skippedFiles.length > 0;
+    title.textContent = failed.length > 0 ? '上传完成（部分失败）' : '上传完成';
+
+    // 摘要行
+    let summaryParts = [];
+    if (total > 0) summaryParts.push(`✅ 成功 ${succeeded} 个`);
+    if (failed.length > 0) summaryParts.push(`❌ 失败 ${failed.length} 个`);
+    if (skippedFiles.length > 0) summaryParts.push(`⏭️ 跳过 ${skippedFiles.length} 个`);
+    summary.textContent = summaryParts.join('，');
+
+    // 合并失败列表和跳过列表
+    const allIssues = [
+        ...failed.map(f => ({
+            ...f,
+            type: 'failed'
+        })),
+        ...skippedFiles.map(f => ({
+            ...f,
+            type: 'skipped'
+        })),
+    ];
+
+    if (allIssues.length > 0) {
+        failedItems.innerHTML = allIssues.map(f => `
+            <div style="padding: 6px 0; border-bottom: 1px solid var(--border-color, #eee); display:flex; gap:8px; align-items:flex-start;">
+                <span style="flex-shrink:0; font-size:0.9rem;">${f.type === 'failed' ? '❌' : '⏭️'}</span>
+                <div style="min-width:0;">
+                    <div style="font-weight:500; word-break:break-all; font-size:0.875rem;">${escapeHtml(f.name)}</div>
+                    <div style="color: var(--text-secondary); font-size:0.8rem;">${escapeHtml(f.reason)}</div>
+                </div>
+            </div>
+        `).join('');
+        failedList.style.display = 'block';
+    } else {
+        failedList.style.display = 'none';
+    }
+
+    modal.style.display = 'flex';
 }
 
 // 批量删除文档
@@ -831,6 +932,16 @@ async function deleteSingleDocument(filename) {
     }
 }
 
+// 关闭上传结果弹窗，并刷新文档列表
+function closeUploadResult() {
+    document.getElementById('uploadResultModal').style.display = 'none';
+    // 关闭时再刷新一次，确保后端索引完成后列表是最新的
+    if (state.currentDocsKbId) {
+        loadDocuments(state.currentDocsKbId);
+        updateStats();
+    }
+}
+
 // 工具函数
 function escapeHtml(str) {
     const div = document.createElement('div');
@@ -847,6 +958,7 @@ window.manageDocuments = manageDocuments;
 window.toggleDocSelection = toggleDocSelection;
 window.toggleSelectAll = toggleSelectAll;
 window.deleteSingleDocument = deleteSingleDocument;
+window.closeUploadResult = closeUploadResult;
 
 // 测试函数：直接打开弹窗
 window.testModalOpen = function() {

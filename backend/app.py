@@ -672,45 +672,131 @@ def _update_env_file(env_path: Path, updates: dict):
     env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
 
 
+def _purge_vector_db():
+    """
+    彻底清空向量数据库：显式删除所有 ChromaDB 集合，再删除整个目录。
+    同时清空所有知识库的 .indexed 标记，以便重新索引。
+    """
+    import shutil, time, chromadb as _chromadb
+
+    vector_db_path = Path(VECTOR_DB_PATH)
+
+    # 先用 ChromaDB API 删除所有集合（清除 SQLite 元数据中的维度信息）
+    if vector_db_path.exists():
+        try:
+            _tmp = _chromadb.PersistentClient(path=str(vector_db_path))
+            for col in _tmp.list_collections():
+                try:
+                    _tmp.delete_collection(col.name)
+                    print(f"[Purge] 已删除集合: {col.name}")
+                except Exception as e:
+                    print(f"[Purge] 删除集合 {col.name} 失败: {e}")
+            del _tmp
+            time.sleep(0.3)
+        except Exception as e:
+            print(f"[Purge] ChromaDB 清理失败: {e}")
+
+        # 再删目录（清除物理文件）
+        try:
+            time.sleep(0.3)
+            shutil.rmtree(str(vector_db_path), ignore_errors=True)
+            print(f"[Purge] 已删除 vector_db 目录")
+        except Exception as e:
+            print(f"[Purge] 删除目录失败（可能有文件锁）: {e}")
+
+    # 重建目录，写入当前模型标记
+    vector_db_path.mkdir(parents=True, exist_ok=True)
+    (vector_db_path / ".embed_model").write_text(EMBED_MODEL, encoding="utf-8")
+
+    # 清空所有知识库的 .indexed 标记，强制重新索引
+    for kb in list_kbs():
+        _save_indexed(set(), kb["kb_id"])
+    print(f"[Purge] 清空完成，当前模型: {EMBED_MODEL}")
+
+
 def _check_embed_model_consistency():
     """
-    启动时检查 embedding 模型配置一致性。
-    
-    策略：比较 .embed_model 标记文件中的模型名与 .env 中的 EMBED_MODEL。
-    不一致则彻底删除 vector_db 目录并重新索引。
+    启动时检查 embedding 模型与向量库的一致性。
+
+    两层检查：
+      1. 模型名称检查：比较 .embed_model 标记与 .env 中的 EMBED_MODEL
+      2. 维度健全性检查：直接读 ChromaDB 的 SQLite 文件，获取已存储的向量维度，
+         与当前模型的已知维度对比（防止 Windows 文件锁导致 rmtree 不完整）
+
+    只要发现任何不一致，就调用 _purge_vector_db() 彻底清空并触发重索引。
     不依赖 Ollama HTTP（启动时模型可能还未就绪）。
     """
     vector_db_path = Path(VECTOR_DB_PATH)
     model_marker = vector_db_path / ".embed_model"
-    
+
+    current_model = EMBED_MODEL
+
+    # ── 检查 1：模型名称是否一致 ──────────────────────────────
     last_model = ""
     if model_marker.exists():
         try:
             last_model = model_marker.read_text(encoding="utf-8").strip()
         except Exception:
             pass
-    
-    current_model = EMBED_MODEL
 
-    # 模型名不一致，且向量库目录非空（有数据）
     if last_model and last_model != current_model:
         print(f"[Startup] ⚠️ Embedding 模型变更: {last_model} → {current_model}")
-        try:
-            import shutil
-            if vector_db_path.exists():
-                shutil.rmtree(str(vector_db_path))
-                print(f"[Startup] ✅ 已删除旧 vector_db 目录")
-            
-            kbs = list_kbs()
-            for kb in kbs:
-                _save_indexed(set(), kb["kb_id"])
-            print(f"[Startup] ✅ 已清空 {len(kbs)} 个知识库的索引标记")
-            print(f"[Startup] 🔄 将在模型就绪后自动重新索引...")
-            _reindex_all_documents()
-        except Exception as e:
-            print(f"[Startup] 处理失败: {e}")
+        print(f"[Startup] 清空向量库并重新索引...")
+        _purge_vector_db()
+        # 启动后台重索引
+        t = threading.Thread(target=_reindex_all_documents, daemon=True)
+        t.start()
+        return
 
-    # 更新标记文件
+    # ── 检查 2：ChromaDB 维度健全性 ───────────────────────────
+    # 即使模型名称一致，也要检查集合是否有旧维度数据残留
+    # 直接读 SQLite 的 segments 表，获取集合实际存储的向量维度
+    # （Windows 文件锁可能导致 rmtree 不完整，SQLite 里存有旧维度）
+    sqlite_path = vector_db_path / "chroma.sqlite3"
+    if sqlite_path.exists():
+        try:
+            import sqlite3 as _sqlite3
+            conn = _sqlite3.connect(str(sqlite_path))
+            c = conn.cursor()
+            # segment_metadata 表记录了各集合的向量维度
+            c.execute("""
+                SELECT sm.int_value
+                FROM segment_metadata sm
+                WHERE sm.key = 'hnsw:dimensions'
+                LIMIT 1
+            """)
+            row = c.fetchone()
+            conn.close()
+
+            if row and row[0]:
+                stored_dim = int(row[0])
+                # 已知模型的向量维度映射
+                KNOWN_DIMS = {
+                    "nomic-embed-text":       768,
+                    "mxbai-embed-large":      1024,
+                    "bge-m3:latest":         1024,
+                    "mge-m3:latest":         1024,
+                    "qwen3-embedding:0.6b":  1024,
+                    "qwen3-embedding:1.7b":  2048,
+                    "qwen3-embedding:4b":    2560,
+                    "qwen3-embedding:8b":    4096,
+                }
+                expected_dim = KNOWN_DIMS.get(current_model)
+                if expected_dim and stored_dim != expected_dim:
+                    print(f"[Startup] ⚠️ 向量维度不匹配: 存储={stored_dim}, 期望={expected_dim} ({current_model})")
+                    print(f"[Startup] 清空向量库并重新索引...")
+                    _purge_vector_db()
+                    t = threading.Thread(target=_reindex_all_documents, daemon=True)
+                    t.start()
+                    return
+                elif expected_dim:
+                    print(f"[Startup] ✅ 向量维度一致: {stored_dim} ({current_model})")
+                else:
+                    print(f"[Startup] ℹ️ 未知模型 {current_model}，跳过维度检查，存储维度={stored_dim}")
+        except Exception as e:
+            print(f"[Startup] 维度检查失败（非致命）: {e}")
+
+    # 确保标记文件与当前配置同步（首次启动时写入）
     try:
         vector_db_path.mkdir(parents=True, exist_ok=True)
         model_marker.write_text(current_model, encoding="utf-8")
@@ -1041,18 +1127,6 @@ async def get_model_status():
 async def get_reindex_status():
     """
     获取重新索引进度状态，供前端轮询展示进度条。
-    
-    响应体示例：
-      {
-        "in_progress": true,
-        "total": 10,
-        "current": 3,
-        "success": 2,
-        "failed": 1,
-        "current_file": "example.md",
-        "status": "正在索引...",
-        "percentage": 30.0
-      }
     """
     with _model_status_lock:
         status = dict(_reindex_status)
@@ -1064,6 +1138,45 @@ async def get_reindex_status():
         status["percentage"] = 0.0
     
     return status
+
+
+@app.post("/api/reload-model/{model_key}")
+async def reload_model(model_key: str):
+    """
+    手动触发单个模型重新检查/加载（用于超时或加载失败后的重试）。
+
+    路径参数:
+      model_key: "chat" | "embed" | "rerank"
+
+    响应：
+      {"status": "started", "message": "..."}
+    """
+    import config as _cfg
+    if model_key not in ("chat", "embed", "rerank"):
+        raise HTTPException(status_code=400, detail=f"无效的模型 key: {model_key}，有效值: chat/embed/rerank")
+
+    model_map = {
+        "chat":   _cfg.CHAT_MODEL,
+        "embed":  _cfg.EMBED_MODEL,
+        "rerank": _cfg.RERANK_MODEL,
+    }
+    model_name = model_map[model_key]
+
+    t = threading.Thread(
+        target=_check_and_load_models,
+        kwargs={
+            "chat_model":   _cfg.CHAT_MODEL,
+            "embed_model":  _cfg.EMBED_MODEL,
+            "rerank_model": _cfg.RERANK_MODEL,
+            "open_browser_after": False,
+            "changed_keys": [model_key],
+        },
+        daemon=True,
+    )
+    t.start()
+    print(f"[ReloadModel] 手动触发重新加载: {model_key} ({model_name})")
+
+    return {"status": "started", "message": f"正在重新加载 {model_name}..."}
 
 @app.post("/api/save-config")
 @app.post("/api/config/models")
@@ -1117,25 +1230,43 @@ async def save_config(req: ModelConfigRequest):
             _invalidate_rag_engines()
             print("[Config] 已销毁所有 RAG 引擎缓存")
             
-            # 步骤 2：删除整个 vector_db 目录
-            # 避免 ChromaDB 残留旧 UUID 集合导致维度冲突
+            # 步骤 2：显式删除所有 ChromaDB 集合（避免维度冲突）
             import shutil
             import time
+            import chromadb
             vector_db_path = Path(VECTOR_DB_PATH)
+            
             if vector_db_path.exists():
+                try:
+                    # 创建临时 ChromaDB 客户端来删除所有集合
+                    temp_client = chromadb.PersistentClient(path=str(vector_db_path))
+                    collections = temp_client.list_collections()
+                    for col in collections:
+                        try:
+                            temp_client.delete_collection(col.name)
+                            print(f"[Config] 已删除集合: {col.name}")
+                        except Exception as ce:
+                            print(f"[Config] 删除集合 {col.name} 失败: {ce}")
+                    # 确保客户端释放所有资源
+                    del temp_client
+                    time.sleep(0.5)
+                except Exception as ce:
+                    print(f"[Config] 列举/删除集合失败: {ce}")
+                
+                # 步骤 3：删除整个 vector_db 目录
                 # 确保所有文件句柄已释放（Windows 文件锁问题）
                 time.sleep(0.5)
                 shutil.rmtree(str(vector_db_path))
                 print(f"[Config] 已删除整个 vector_db 目录")
             
-            # 步骤 3：清空所有知识库的索引标记
+            # 步骤 4：清空所有知识库的索引标记
             kbs = list_kbs()
             for kb in kbs:
                 _save_indexed(set(), kb["kb_id"])
             vectors_cleared = True
             print(f"[Config] Embedding 模型已变更，已清空 {len(kbs)} 个知识库的向量索引标记")
 
-            # 步骤 4：重建目录并更新模型标记
+            # 步骤 5：重建目录并更新模型标记
             vector_db_path.mkdir(parents=True, exist_ok=True)
             model_marker = vector_db_path / ".embed_model"
             model_marker.write_text(req.embed_model, encoding="utf-8")
@@ -1231,11 +1362,19 @@ async def upload_doc(file: UploadFile = File(...), kb_id: str = "knowledge_base"
     kb = get_kb(kb_id)
     if not kb:
         raise HTTPException(status_code=404, detail=f"知识库 {kb_id} 不存在")
-    
+
+    # 取纯文件名（去掉 webkitdirectory 带来的子目录路径）
+    # 例：file.filename = "001成长优享/report.pdf" → "report.pdf"
+    pure_filename = Path(file.filename).name
+
+    # 过滤 Office 临时锁定文件（~$ 开头）
+    if pure_filename.startswith("~$"):
+        raise HTTPException(status_code=400, detail=f"跳过临时文件: {pure_filename}")
+
     try:
-        # 保存到对应知识库的上传目录
+        # 保存到对应知识库的上传目录（使用纯文件名，不保留子目录结构）
         kb_upload_dir = get_kb_upload_dir(kb_id)
-        fpath = upload_file(file, upload_dir=str(kb_upload_dir))
+        fpath = upload_file(file, filename=pure_filename, upload_dir=str(kb_upload_dir))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

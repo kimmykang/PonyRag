@@ -109,6 +109,12 @@
                         <span class="model-status-dot checking"></span>
                         <span class="model-status-name">对话模型</span>
                         <span class="model-status-msg">检查中...</span>
+                        <button class="model-reload-btn" onclick="reloadModel('chat')" title="重新加载对话模型">
+                            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5">
+                                <polyline points="23 4 23 10 17 10"></polyline>
+                                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+                            </svg>
+                        </button>
                     </div>
 
                     <!-- 嵌入模型状态条目（用于文本向量化） -->
@@ -116,6 +122,12 @@
                         <span class="model-status-dot checking"></span>
                         <span class="model-status-name">嵌入模型</span>
                         <span class="model-status-msg">检查中...</span>
+                        <button class="model-reload-btn" onclick="reloadModel('embed')" title="重新加载嵌入模型">
+                            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5">
+                                <polyline points="23 4 23 10 17 10"></polyline>
+                                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+                            </svg>
+                        </button>
                     </div>
 
                     <!-- Rerank 模型状态条目（用于搜索结果重排序） -->
@@ -123,6 +135,12 @@
                         <span class="model-status-dot checking"></span>
                         <span class="model-status-name">Rerank模型</span>
                         <span class="model-status-msg">检查中...</span>
+                        <button class="model-reload-btn" onclick="reloadModel('rerank')" title="重新加载Rerank模型">
+                            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5">
+                                <polyline points="23 4 23 10 17 10"></polyline>
+                                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+                            </svg>
+                        </button>
                     </div>
 
                 </div>
@@ -299,6 +317,9 @@
                 </div>
                 <div class="settings-field">
                     <label>嵌入模型 <span class="field-badge">Embed</span></label>
+                    <p style="margin: 4px 0 8px; font-size: 0.82rem; color: #e53e3e; font-weight: 500;">
+                        ⚠️ 切换嵌入模型将清空所有向量数据并重新索引，建议不要随便切换！
+                    </p>
                     <select id="embedModelSelect" class="model-select"></select>
                 </div>
                 <div class="settings-field">
