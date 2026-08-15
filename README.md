@@ -362,6 +362,8 @@ Ollama 首次加载大模型需要时间（30秒-几分钟），请耐心等待�
 
 **kimikang**
 
+📧 86941737@qq.com
+
 ---
 
 <div id="english-documentation"></div>
@@ -517,6 +519,8 @@ This project is licensed under the [Apache License 2.0](LICENSE).
 ### 👨‍💻 Author
 
 **kimikang**
+
+📧 86941737@qq.com
 
 ---
 
