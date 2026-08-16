@@ -109,6 +109,7 @@
 - ✅ 选择特定知识库或全库检索
 - ✅ Markdown 格式渲染（代码高亮、表格等）
 - ✅ 多轮对话上下文记忆
+- ✅ **流式输出** — 逐 token 实时渲染，告别等待
 
 #### 4. 模型管理
 - ✅ 在线切换对话模型
@@ -116,6 +117,10 @@
 - ✅ 在线切换 OCR 视觉模型（用于图片型 PDF / 扫描件）
 - ✅ 调整检索参数（TOP-K、Rerank-TOP-K 等）
 - ✅ 实时显示模型加载状态
+
+#### 5. 通用设置
+- ✅ **主题切换** — 浅色 / 深色两种主题，设置后即时生效并跨页面持久保存
+- ✅ **流式输出开关** — 可随时切换逐字流式输出或等待完整答案一次性显示，默认关闭
 
 ### 📦 快速开始
 
@@ -207,8 +212,11 @@ chmod +x start.sh
 
 点击右上角 ⚙️ 图标打开设置面板：
 
-- **模型设置**：切换 Chat/Embed/Rerank 模型
+- **模型设置**：切换 Chat/Embed/Rerank/OCR 模型
 - **参数设置**：调整 TOP-K、Rerank-TOP-K、分块大小等
+- **通用设置**：
+  - 🎨 **主题切换** — 点击「☀️ 浅色」或「🌙 深色」卡片即时切换界面主题，无需保存，刷新后保持
+  - ⚡ **流式输出** — 开启后 AI 回答逐字实时渲染；关闭则等待完整答案后一次性显示（默认关闭）
 
 ### ⚙️ 配置说明
 
@@ -222,7 +230,7 @@ OLLAMA_BASE_URL=http://localhost:11434
 CHAT_MODEL=qwen3.6:27b                      # 对话模型
 EMBED_MODEL=qwen3-embedding:4b               # 嵌入模型（⚠️ 切换后需重建向量库）
 RERANK_MODEL=qllama/bge-reranker-v2-m3:f16  # Rerank 模型
-OCR_MODEL=qwen2.5vl:7b                                   # OCR 视觉模型（留空禁用，如 qwen2.5vl:7b）
+OCR_MODEL=qwen2.5vl:7b![alt text](image.png)                                   # OCR 视觉模型（留空禁用，如 qwen2.5vl:7b）
 
 # RAG 参数
 TOP_K=6                # 向量检索召回数量
@@ -338,6 +346,8 @@ Ollama 首次加载大模型需要时间（30秒-几分钟），请耐心等待�
 - [x] 模型热切换
 - [x] 参数动态调整
 - [x] 图片型 PDF OCR 支持（基于 Ollama 视觉模型）
+- [x] 流式输出（SSE 逐 token 实时渲染）
+- [x] 深色 / 浅色主题切换
 - [ ] 文档在线预览
 - [ ] 导出聊天记录
 - [ ] 多用户权限管理
@@ -382,6 +392,8 @@ Ollama 首次加载大模型需要时间（30秒-几分钟），请耐心等待�
 - 🎨 **Modern UI** — Responsive web interface for mobile and desktop
 - ⚡ **High Performance** — ChromaDB vector storage with millisecond-level response
 - 🔄 **Hot Model Swapping** — Switch LLM/Embedding/Rerank/OCR models on-the-fly
+- 🌊 **Streaming Output** — Real-time token-by-token rendering via SSE
+- 🌓 **Theme Switching** — Light and dark themes, persisted across pages
 
 ### 🏗️ Tech Stack
 
@@ -472,6 +484,13 @@ Browser will automatically open [http://localhost:8001](http://localhost:8001)
 2. Select a knowledge base in the left sidebar (or "All Enabled Knowledge Bases")
 3. Type your question in the input box and press Enter
 4. AI will generate answers based on knowledge base content and show references
+
+#### General Settings
+
+Click the ⚙️ icon in the top-right corner to open the settings panel:
+
+- **Theme**: Click the **☀️ Light** or **🌙 Dark** card to switch themes instantly — no save needed, persists across page reloads
+- **Streaming Output**: Toggle real-time token-by-token output. When on, answers stream as they are generated; when off, the complete answer appears at once (default: off)
 
 ### ⚙️ Configuration
 

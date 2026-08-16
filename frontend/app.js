@@ -100,6 +100,7 @@ const dom = {
  *   6. 启动模型状态轮询（每 3 秒检查一次）
  */
 document.addEventListener('DOMContentLoaded', async () => {
+    initTheme(); // 先应用主题，避免样式跳变
     initEventListeners();
     checkConnection();
 
@@ -474,8 +475,21 @@ async function openSettingsModal() {
     // Tab 切换逻辑
     document.getElementById('tabModelBtn').onclick = () => switchTab('model');
     document.getElementById('tabParamsBtn').onclick = () => switchTab('params');
+    const tabGeneralBtn = document.getElementById('tabGeneralBtn');
+    if (tabGeneralBtn) tabGeneralBtn.onclick = () => switchTab('general');
     // 默认显示模型设置 Tab
     switchTab('model');
+
+    // 通用设置：读取流式输出开关状态
+    const streamingToggle = document.getElementById('streamingToggle');
+    if (streamingToggle) streamingToggle.checked = loadGeneralSetting('streaming', false);
+
+    // 通用设置：同步主题选中状态
+    const currentTheme = loadGeneralSetting('theme', 'light');
+    const lightEl = document.getElementById('themeLight');
+    const darkEl = document.getElementById('themeDark');
+    if (lightEl) lightEl.classList.toggle('active', currentTheme === 'light');
+    if (darkEl) darkEl.classList.toggle('active', currentTheme === 'dark');
 
     modal.style.display = 'flex';
 
@@ -485,6 +499,18 @@ async function openSettingsModal() {
     document.getElementById('settingsCloseBtn').onclick = closeModal;
     document.getElementById('settingsCancelBtn').onclick = closeModal;
     document.getElementById('paramsCancelBtn').onclick = closeModal;
+    const generalCancelBtn = document.getElementById('generalCancelBtn');
+    if (generalCancelBtn) generalCancelBtn.onclick = closeModal;
+
+    // 通用设置保存
+    const generalSaveBtn = document.getElementById('generalSaveBtn');
+    if (generalSaveBtn) {
+        generalSaveBtn.onclick = () => {
+            const tog = document.getElementById('streamingToggle');
+            if (tog) saveGeneralSetting('streaming', tog.checked);
+            closeModal();
+        };
+    }
     modal.onclick = (e) => {
         if (e.target === modal) closeModal();
     };
@@ -582,20 +608,18 @@ async function openSettingsModal() {
 function switchTab(tab) {
     const modelContent = document.getElementById('tabModelContent');
     const paramsContent = document.getElementById('tabParamsContent');
+    const generalContent = document.getElementById('tabGeneralContent');
     const modelBtn = document.getElementById('tabModelBtn');
     const paramsBtn = document.getElementById('tabParamsBtn');
+    const generalBtn = document.getElementById('tabGeneralBtn');
 
-    if (tab === 'model') {
-        modelContent.style.display = 'block';
-        paramsContent.style.display = 'none';
-        modelBtn.classList.add('active');
-        paramsBtn.classList.remove('active');
-    } else {
-        modelContent.style.display = 'none';
-        paramsContent.style.display = 'block';
-        modelBtn.classList.remove('active');
-        paramsBtn.classList.add('active');
-    }
+    modelContent.style.display = tab === 'model' ? 'block' : 'none';
+    paramsContent.style.display = tab === 'params' ? 'block' : 'none';
+    if (generalContent) generalContent.style.display = tab === 'general' ? 'block' : 'none';
+
+    modelBtn.classList.toggle('active', tab === 'model');
+    paramsBtn.classList.toggle('active', tab === 'params');
+    if (generalBtn) generalBtn.classList.toggle('active', tab === 'general');
 }
 
 /**
@@ -1125,8 +1149,43 @@ async function handleChatSubmit(e) {
     state.isProcessing = true;
     const typingEl = addTypingIndicator();
 
+    // 根据通用设置决定使用流式还是非流式接口
+    const useStreaming = loadGeneralSetting('streaming', false);
+
+    if (!useStreaming) {
+        // ── 非流式：等待完整答案一次性显示 ────────────────────────
+        try {
+            const res = await fetch(`${API_BASE}/api/chat`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    question: question,
+                    session_id: state.sessionId,
+                    chat_history: state.chatHistory,
+                    kb_ids: state.selectedKbIds,
+                }),
+            });
+            const data = await res.json();
+            typingEl.remove();
+            if (!res.ok) throw new Error(data.detail || '请求失败');
+            addMessage('assistant', data.answer, data.sources, new Date().toISOString());
+            state.chatHistory.push(['assistant', data.answer]);
+            state.sessionId = data.session_id || state.sessionId;
+        } catch (err) {
+            typingEl.remove();
+            addMessage('assistant', `请求出错: ${err.message}`);
+        } finally {
+            state.isProcessing = false;
+            toggleSendButton();
+        }
+        return;
+    }
+
+    // ── 流式：逐 token 实时渲染 ────────────────────────────────
     try {
-        const res = await fetch(`${API_BASE}/api/chat`, {
+        const res = await fetch(`${API_BASE}/api/chat/stream`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -1135,34 +1194,77 @@ async function handleChatSubmit(e) {
                 question: question,
                 session_id: state.sessionId,
                 chat_history: state.chatHistory,
-                kb_ids: state.selectedKbIds, // null 表示所有启用的知识库，否则传指定列表
+                kb_ids: state.selectedKbIds,
             }),
         });
 
-        // 先获取响应文本，便于调试
-        const responseText = await res.text();
-        console.log('[Chat] Response status:', res.status);
-        console.log('[Chat] Response text:', responseText);
-
-        let data;
-        try {
-            data = JSON.parse(responseText);
-        } catch (parseError) {
-            console.error('[Chat] JSON解析失败:', parseError);
-            console.error('[Chat] 原始响应:', responseText);
-            throw new Error('服务器返回了非JSON格式的响应');
-        }
-
-        // 移除打字指示器
-        typingEl.remove();
-
         if (!res.ok) {
-            throw new Error(data.detail || '请求失败');
+            const errData = await res.json().catch(() => ({}));
+            throw new Error(errData.detail || `HTTP ${res.status}`);
         }
 
-        // 添加助手消息
-        addMessage('assistant', data.answer, data.sources, new Date().toISOString());
-        state.chatHistory.push(['assistant', data.answer]);
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let fullAnswer = '';
+        let sources = [];
+        let sessionId = state.sessionId;
+        let contentDiv = null; // 收到第一个 token 后才创建
+
+        while (true) {
+            const {
+                done,
+                value
+            } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, {
+                stream: true
+            });
+            const lines = buffer.split('\n');
+            buffer = lines.pop();
+
+            for (const line of lines) {
+                if (!line.startsWith('data: ')) continue;
+                const jsonStr = line.slice(6).trim();
+                if (!jsonStr) continue;
+
+                let event;
+                try {
+                    event = JSON.parse(jsonStr);
+                } catch {
+                    continue;
+                }
+
+                if (event.token) {
+                    // 第一个 token：移除 typing indicator，创建真正的消息气泡
+                    if (!contentDiv) {
+                        typingEl.remove();
+                        contentDiv = addStreamingMessage().contentDiv;
+                    }
+                    fullAnswer += event.token;
+                    contentDiv.innerHTML = renderMarkdown(fullAnswer);
+                    scrollToBottom();
+                } else if (event.done) {
+                    sources = event.sources || [];
+                    sessionId = event.session_id || sessionId;
+                    if (contentDiv) {
+                        contentDiv.innerHTML = renderMarkdown(fullAnswer);
+                        appendSources(contentDiv, sources);
+                    }
+                    scrollToBottom();
+                } else if (event.error) {
+                    if (!contentDiv) {
+                        typingEl.remove();
+                        contentDiv = addStreamingMessage().contentDiv;
+                    }
+                    contentDiv.textContent = `出错：${event.error}`;
+                }
+            }
+        }
+
+        state.sessionId = sessionId;
+        state.chatHistory.push(['assistant', fullAnswer]);
 
     } catch (err) {
         typingEl.remove();
@@ -1256,6 +1358,47 @@ function addTypingIndicator() {
     return msgDiv;
 }
 
+// 创建流式输出的 AI 消息气泡（内容为空，后续逐步填入）
+function addStreamingMessage() {
+    const msgDiv = document.createElement('div');
+    msgDiv.className = 'message assistant';
+
+    const avatar = document.createElement('div');
+    avatar.className = 'message-avatar';
+    avatar.textContent = 'AI';
+
+    const contentDiv = document.createElement('div');
+    contentDiv.className = 'message-content';
+
+    msgDiv.appendChild(avatar);
+    msgDiv.appendChild(contentDiv);
+    dom.messages.appendChild(msgDiv);
+    scrollToBottom();
+
+    return {
+        msgDiv,
+        contentDiv
+    };
+}
+
+// 在消息气泡末尾追加参考来源
+function appendSources(contentDiv, sources) {
+    if (!sources || sources.length === 0) return;
+    const sourcesDiv = document.createElement('div');
+    sourcesDiv.className = 'sources';
+    sourcesDiv.innerHTML = `
+        <div class="source-title">参考来源:</div>
+        ${sources.map(s => `
+            <div class="source-item">
+                <span>#${s.index}</span>
+                <span>${escapeHtml(s.source)}</span>
+                <span class="source-score">得分: ${s.score}</span>
+            </div>
+        `).join('')}
+    `;
+    contentDiv.appendChild(sourcesDiv);
+}
+
 function scrollToBottom() {
     requestAnimationFrame(() => {
         dom.chatContainer.scrollTop = dom.chatContainer.scrollHeight;
@@ -1279,6 +1422,44 @@ function escapeHtml(str) {
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
+}
+
+// ── 通用设置持久化（localStorage）────────────────────────────
+function loadGeneralSetting(key, defaultValue) {
+    const raw = localStorage.getItem(`general_${key}`);
+    if (raw === null) return defaultValue;
+    try {
+        return JSON.parse(raw);
+    } catch {
+        return defaultValue;
+    }
+}
+
+function saveGeneralSetting(key, value) {
+    localStorage.setItem(`general_${key}`, JSON.stringify(value));
+}
+
+// ── 主题管理 ────────────────────────────────────────────────
+/**
+ * 应用主题：立即切换 data-theme，持久化到 localStorage
+ * @param {'light'|'dark'} theme
+ */
+function applyTheme(theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+    saveGeneralSetting('theme', theme);
+    // 更新主题选择卡片的 active 状态
+    const lightEl = document.getElementById('themeLight');
+    const darkEl = document.getElementById('themeDark');
+    if (lightEl) lightEl.classList.toggle('active', theme === 'light');
+    if (darkEl) darkEl.classList.toggle('active', theme === 'dark');
+}
+
+/**
+ * 页面初始化时应用已保存的主题（CSS 变量覆盖）
+ */
+function initTheme() {
+    const saved = loadGeneralSetting('theme', 'light');
+    document.documentElement.setAttribute('data-theme', saved);
 }
 
 function formatFileSize(bytes) {

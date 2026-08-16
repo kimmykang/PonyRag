@@ -11,6 +11,17 @@
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><circle cx='32' cy='32' r='30' fill='%236366f1'/><text x='32' y='44' text-anchor='middle' fill='white' font-size='28' font-weight='bold' font-family='Arial'>AI</text></svg>">
     <!-- 引入外部样式表 -->
     <link rel="stylesheet" href="/static/style.css">
+    <!-- 立即应用主题，防止深色模式下页面闪白 -->
+    <script>
+        (function() {
+            const t = localStorage.getItem('general_theme');
+            if (t) {
+                try {
+                    document.documentElement.setAttribute('data-theme', JSON.parse(t));
+                } catch (e) {}
+            }
+        })();
+    </script>
 </head>
 
 <body>
@@ -314,6 +325,9 @@
                 <button class="settings-tab" id="tabParamsBtn" data-tab="params">
                     ⚙️ 参数设置
                 </button>
+                <button class="settings-tab" id="tabGeneralBtn" data-tab="general">
+                    🔧 通用设置
+                </button>
             </div>
 
             <!-- Tab 内容：模型设置 -->
@@ -419,11 +433,63 @@
                 </div>
             </div>
 
+            <!-- Tab 内容：通用设置 -->
+            <div class="settings-tab-content" id="tabGeneralContent" style="display:none;">
+                <div class="params-group">
+                    <h4 class="params-group-title">🎨 主题</h4>
+                    <div class="settings-field">
+                        <div class="theme-selector">
+                            <!-- 浅色主题 -->
+                            <div class="theme-option" id="themeLight" onclick="applyTheme('light')">
+                                <div class="theme-preview light">
+                                    <div class="tp-bar accent"></div>
+                                    <div class="tp-bar"></div>
+                                    <div class="tp-bar short"></div>
+                                </div>
+                                <span class="theme-name">☀️ 浅色</span>
+                            </div>
+                            <!-- 深色主题 -->
+                            <div class="theme-option" id="themeDark" onclick="applyTheme('dark')">
+                                <div class="theme-preview dark">
+                                    <div class="tp-bar accent"></div>
+                                    <div class="tp-bar"></div>
+                                    <div class="tp-bar short"></div>
+                                </div>
+                                <span class="theme-name">🌙 深色</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="params-group">
+                    <h4 class="params-group-title">💬 对话设置</h4>
+
+                    <!-- 流式输出开关 -->
+                    <div class="settings-field">
+                        <div class="toggle-row">
+                            <div>
+                                <div class="toggle-label">流式输出</div>
+                                <div class="toggle-desc">开启后 AI 回答会逐字输出，关闭则等待完整答案后一次性显示</div>
+                            </div>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="streamingToggle">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="modal-actions">
+                    <button class="btn btn-secondary" id="generalCancelBtn">取消</button>
+                    <button class="btn btn-primary" id="generalSaveBtn">保存设置</button>
+                </div>
+            </div>
+
         </div>
     </div>
 
     <!-- 引入前端交互逻辑脚本，v=2 用于强制浏览器刷新缓存 -->
-    <script src="/static/app.js?v=6"></script>
+    <script src="/static/app.js?v=8"></script>
 
     <!-- =====================================================
          Embedding 模型变更警告 Modal：更换嵌入模型时弹出

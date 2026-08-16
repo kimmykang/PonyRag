@@ -733,6 +733,18 @@ def _check_embed_model_consistency():
 
     current_model = EMBED_MODEL
 
+    # 已知模型的向量维度映射（所有检查都使用这个字典）
+    KNOWN_DIMS = {
+        "nomic-embed-text":       768,
+        "mxbai-embed-large":      1024,
+        "bge-m3:latest":         1024,
+        "mge-m3:latest":         1024,
+        "qwen3-embedding:0.6b":  1024,
+        "qwen3-embedding:1.7b":  2048,
+        "qwen3-embedding:4b":    2560,
+        "qwen3-embedding:8b":    4096,
+    }
+
     # ── 检查 1：模型名称是否一致 ──────────────────────────────
     last_model = ""
     if model_marker.exists():
@@ -741,19 +753,16 @@ def _check_embed_model_consistency():
         except Exception:
             pass
 
-    if last_model and last_model != current_model:
-        print(f"[Startup] ⚠️ Embedding 模型变更: {last_model} → {current_model}")
-        print(f"[Startup] 清空向量库并重新索引...")
-        _purge_vector_db()
-        # 启动后台重索引
-        t = threading.Thread(target=_reindex_all_documents, daemon=True)
-        t.start()
-        return
+    model_name_changed = last_model and last_model != current_model
 
     # ── 检查 2：ChromaDB 维度健全性 ───────────────────────────
     # 即使模型名称一致，也要检查集合是否有旧维度数据残留
     # 直接读 SQLite 的 segments 表，获取集合实际存储的向量维度
     # （Windows 文件锁可能导致 rmtree 不完整，SQLite 里存有旧维度）
+    dimension_mismatch = False
+    stored_dim = None
+    expected_dim = KNOWN_DIMS.get(current_model)
+
     sqlite_path = vector_db_path / "chroma.sqlite3"
     if sqlite_path.exists():
         try:
@@ -772,31 +781,40 @@ def _check_embed_model_consistency():
 
             if row and row[0]:
                 stored_dim = int(row[0])
-                # 已知模型的向量维度映射
-                KNOWN_DIMS = {
-                    "nomic-embed-text":       768,
-                    "mxbai-embed-large":      1024,
-                    "bge-m3:latest":         1024,
-                    "mge-m3:latest":         1024,
-                    "qwen3-embedding:0.6b":  1024,
-                    "qwen3-embedding:1.7b":  2048,
-                    "qwen3-embedding:4b":    2560,
-                    "qwen3-embedding:8b":    4096,
-                }
-                expected_dim = KNOWN_DIMS.get(current_model)
                 if expected_dim and stored_dim != expected_dim:
-                    print(f"[Startup] ⚠️ 向量维度不匹配: 存储={stored_dim}, 期望={expected_dim} ({current_model})")
-                    print(f"[Startup] 清空向量库并重新索引...")
-                    _purge_vector_db()
-                    t = threading.Thread(target=_reindex_all_documents, daemon=True)
-                    t.start()
-                    return
-                elif expected_dim:
-                    print(f"[Startup] ✅ 向量维度一致: {stored_dim} ({current_model})")
-                else:
-                    print(f"[Startup] ℹ️ 未知模型 {current_model}，跳过维度检查，存储维度={stored_dim}")
+                    dimension_mismatch = True
         except Exception as e:
             print(f"[Startup] 维度检查失败（非致命）: {e}")
+
+    # ── 决策：是否需要清空向量库 ─────────────────────────────
+    need_purge = False
+    purge_reason = ""
+
+    if model_name_changed:
+        need_purge = True
+        purge_reason = f"Embedding 模型变更: {last_model} → {current_model}"
+    elif dimension_mismatch:
+        need_purge = True
+        purge_reason = f"向量维度不匹配: 存储={stored_dim}, 期望={expected_dim} ({current_model})"
+
+    if need_purge:
+        print(f"[Startup] ⚠️ {purge_reason}")
+        print(f"[Startup] 清空向量库并重新索引...")
+        _purge_vector_db()
+        # 启动后台重索引
+        t = threading.Thread(target=_reindex_all_documents, daemon=True)
+        t.start()
+        return
+
+    # 一切正常
+    if expected_dim and stored_dim:
+        print(f"[Startup] ✅ 向量维度一致: {stored_dim} ({current_model})")
+    elif expected_dim:
+        print(f"[Startup] ℹ️ 向量库为空，当前模型: {current_model} (维度={expected_dim})")
+    else:
+        print(f"[Startup] ℹ️ 未知模型 {current_model}，跳过维度检查")
+        if stored_dim:
+            print(f"[Startup] ℹ️ 当前存储的向量维度: {stored_dim}")
 
     # 确保标记文件与当前配置同步（首次启动时写入）
     try:
@@ -1041,6 +1059,107 @@ async def chat(req: ChatRequest):
         sources=result["sources"],
         has_knowledge=result["has_knowledge"],
         session_id=session_id,
+    )
+
+
+@app.post("/api/chat/stream")
+async def chat_stream(req: ChatRequest):
+    """
+    流式聊天接口（SSE）：逐 token 输出，前端实时渲染。
+
+    响应格式：text/event-stream，每行格式为：
+      data: {"token": "..."}\n\n        — 每个 token
+      data: {"done": true, "sources": [...], "session_id": "...", "has_knowledge": bool}\n\n  — 完成
+      data: {"error": "..."}\n\n        — 错误
+    """
+    import json as _json
+    from fastapi.responses import StreamingResponse as _SR
+
+    # 确定要检索的知识库列表（与非流式接口完全一致）
+    if req.kb_ids:
+        kb_ids = req.kb_ids
+    else:
+        enabled = list_enabled_kbs()
+        if not enabled:
+            async def _no_kb():
+                msg = _json.dumps({"done": True, "sources": [], "has_knowledge": False,
+                                   "answer": "暂无可用的知识库。", "session_id": req.session_id or str(uuid.uuid4())}, ensure_ascii=False)
+                yield f"data: {msg}\n\n"
+            return _SR(_no_kb(), media_type="text/event-stream")
+        kb_ids = [kb["kb_id"] for kb in enabled]
+
+    # 跨知识库检索（同非流式接口）
+    import config as _cfg
+    all_docs = []
+    for kb_id in kb_ids:
+        try:
+            engine = get_rag_engine(kb_id)
+            docs = engine.vector_store.search(req.question, collection_name=kb_id, top_k=_cfg.TOP_K)
+            all_docs.extend(docs)
+        except Exception as e:
+            print(f"[ChatStream] 检索知识库 {kb_id} 时出错: {e}")
+
+    session_id = req.session_id or str(uuid.uuid4())
+    main_engine = get_rag_engine(kb_ids[0])
+
+    async def _generate():
+        import asyncio
+        full_answer = []
+        sources = []
+        has_knowledge = False
+
+        loop = asyncio.get_event_loop()
+        queue = asyncio.Queue()
+
+        # 在线程池里运行同步生成器，把 event 放入 asyncio Queue
+        def _run_sync():
+            try:
+                for event in main_engine.stream_answer_with_docs(
+                    question=req.question,
+                    documents=all_docs,
+                    chat_history=req.chat_history,
+                ):
+                    loop.call_soon_threadsafe(queue.put_nowait, event)
+            except Exception as e:
+                loop.call_soon_threadsafe(queue.put_nowait, {"error": str(e)})
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, None)  # 哨兵：结束信号
+
+        loop.run_in_executor(None, _run_sync)
+
+        while True:
+            event = await queue.get()
+            if event is None:
+                break
+
+            if "token" in event:
+                full_answer.append(event["token"])
+                yield f"data: {_json.dumps({'token': event['token']}, ensure_ascii=False)}\n\n"
+            elif "done" in event:
+                sources = event.get("sources", [])
+                has_knowledge = event.get("has_knowledge", False)
+                final = {
+                    "done":          True,
+                    "sources":       sources,
+                    "has_knowledge": has_knowledge,
+                    "session_id":    session_id,
+                }
+                yield f"data: {_json.dumps(final, ensure_ascii=False)}\n\n"
+            elif "error" in event:
+                sources = event.get("sources", [])
+                yield f"data: {_json.dumps({'error': event['error']}, ensure_ascii=False)}\n\n"
+
+        # 保存聊天记录
+        save_message(session_id, "user", req.question)
+        save_message(session_id, "assistant", "".join(full_answer).strip(), sources)
+
+    return _SR(
+        _generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",   # 禁用 Nginx 缓冲（代理场景）
+        },
     )
 
 

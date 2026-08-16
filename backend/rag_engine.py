@@ -356,3 +356,102 @@ class RagEngine:
                 "sources":       sources,
                 "has_knowledge": True,
             }
+
+    def stream_answer_with_docs(self, question: str, documents: List[Document], chat_history: Optional[List[tuple]] = None):
+        """
+        流式生成回答（SSE 版）。
+        直接调用 Ollama /api/generate 流式接口，绕过 LangChain 缓冲问题。
+
+        Yields:
+            dict — 每个 token：{"token": "..."}
+            dict — 完成信号：{"done": True, "sources": [...], "has_knowledge": bool, "answer": str}
+            dict — 错误信号：{"error": "..."}
+        """
+        import json as _json
+
+        if not documents:
+            yield {"done": True, "sources": [], "has_knowledge": False,
+                   "answer": "抱歉，知识库中暂无相关内容。"}
+            return
+
+        # Rerank 精排
+        reranked_docs = self._rerank_documents(question, documents, top_k=RERANK_TOP_K)
+
+        # 构建上下文和来源
+        context_parts = []
+        sources = []
+        for i, doc in enumerate(reranked_docs):
+            context_parts.append(doc.page_content)
+            source_info = doc.metadata.get("source", "unknown")
+            sources.append({
+                "index":  i + 1,
+                "source": source_info,
+                "score":  round(doc.metadata.get("rerank_score", doc.metadata.get("similarity_score", 0)), 4),
+            })
+
+        context = (chr(10) + chr(10)).join(context_parts)
+        context = self._trim_context(context, max_tokens=2000)
+
+        # 构建 Prompt（与 answer_with_docs 完全一致）
+        prompt_template = (
+            "你是一个智能客服助手。请根据以下参考知识回答用户的问题。\n"
+            "要求：\n"
+            "1. 如果参考知识中有相关信息，请基于参考内容回答问题\n"
+            "2. 如果参考知识中没有相关信息，请如实告知用户无法回答\n"
+            "3. 回答要专业、简洁、有条理\n\n"
+            "参考知识：\n{context}\n\n"
+            "用户问题：{question}\n\n"
+            "请回答："
+        )
+        system_prompt = prompt_template.format(context=context, question=question)
+
+        if chat_history:
+            history_lines = []
+            for h in chat_history[-6:]:
+                role = "用户" if h[0] else "客服"
+                history_lines.append(f"{role}: {h[1]}")
+            history_str = chr(10).join(history_lines)
+            system_prompt = "之前的对话记录：\n" + history_str + "\n\n" + system_prompt
+
+        # 直接调用 Ollama /api/generate 流式接口（绕过 LangChain 缓冲）
+        full_answer = []
+        try:
+            with httpx.Client(transport=httpx.HTTPTransport(), timeout=120) as client:
+                with client.stream(
+                    "POST",
+                    f"{OLLAMA_BASE_URL}/api/generate",
+                    json={
+                        "model":  CHAT_MODEL,
+                        "prompt": system_prompt,
+                        "stream": True,
+                        "options": {
+                            "temperature": 0.3,
+                            "num_ctx":     4096,
+                        },
+                    },
+                ) as resp:
+                    resp.raise_for_status()
+                    for line in resp.iter_lines():
+                        if not line:
+                            continue
+                        try:
+                            chunk = _json.loads(line)
+                        except Exception:
+                            continue
+                        token = chunk.get("response", "")
+                        if token:
+                            full_answer.append(token)
+                            yield {"token": token}
+                        if chunk.get("done"):
+                            break
+
+            yield {
+                "done":          True,
+                "sources":       sources,
+                "has_knowledge": True,
+                "answer":        "".join(full_answer).strip(),
+            }
+        except Exception as e:
+            error_msg = str(e)
+            msg = "模型响应超时，请稍后重试。" if ("502" in error_msg or "Gateway" in error_msg) else f"模型调用失败: {error_msg}"
+            yield {"error": msg, "sources": sources}
