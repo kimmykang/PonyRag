@@ -2231,3 +2231,17 @@ body {
 [data-theme="dark"] .toggle-switch input:checked+.toggle-slider {
     background: var(--primary);
 }
+
+/* 深色主题下 strong/b 比普通文字更亮，形成视觉层次 */
+[data-theme="dark"] strong,
+[data-theme="dark"] b {
+    color: #f8fafc;
+    font-weight: 600;
+}
+
+/* 消息气泡内的 strong 用紫色调，更醒目 */
+[data-theme="dark"] .message-content strong,
+[data-theme="dark"] .message-content b {
+    color: #a5b4fc;
+    font-weight: 600;
+}
