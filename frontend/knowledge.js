@@ -627,11 +627,18 @@ function renderDocuments() {
                 </td>
                 <td class="doc-chunk-cell">
                     ${doc.chunk_method
-                        ? `<span class="chunk-method-tag ${doc.up_to_date === false ? 'stale' : ''}" title="切分大小: ${doc.chunk_size}, 块数: ${doc.chunk_count}">
+                        ? `<span class="chunk-method-tag ${doc.up_to_date === false ? 'stale' : ''} chunk-tag-clickable"
+                               title="点击修改切分方式"
+                               onclick="window.openRechunkPanel('${safeName}', '${doc.chunk_method}', ${doc.chunk_size}, ${doc.chunk_overlap})">
                                ${METHOD_LABEL[doc.chunk_method] || doc.chunk_method}
                                <span class="chunk-count">${doc.chunk_count}块</span>
+                               ✏️
                            </span>`
-                        : '<span class="chunk-method-tag none" title="上传于切分记录功能加入之前，实际使用递归切分">旧版·递归</span>'
+                        : `<span class="chunk-method-tag none chunk-tag-clickable"
+                               title="点击设置切分方式"
+                               onclick="window.openRechunkPanel('${safeName}', 'recursive', 500, 50)">
+                               旧版·递归 ✏️
+                           </span>`
                     }
                 </td>
                 <td class="doc-time-cell">
@@ -1065,4 +1072,82 @@ function _updateUploadChunkPanel() {
     const showSize = method === '' || method === 'fixed' || method === 'recursive';
     if (sizeRow) sizeRow.style.display = showSize ? '' : 'none';
     if (overRow) overRow.style.display = showSize ? '' : 'none';
+}
+
+// ── 重新切分文档 ─────────────────────────────────────────────
+
+let _rechunkFilename = null;
+
+/**
+ * 打开重切分面板
+ */
+window.openRechunkPanel = function(filename, method, size, overlap) {
+    _rechunkFilename = filename;
+    document.getElementById('rechunkFilename').textContent = '文件：' + filename;
+    document.getElementById('rechunkMethod').value = method || 'recursive';
+    document.getElementById('rechunkSize').value = size || 500;
+    document.getElementById('rechunkOverlap').value = overlap || 50;
+    document.getElementById('rechunkHint').textContent = '';
+    document.getElementById('rechunkConfirmBtn').disabled = false;
+    updateRechunkSizeVisibility();
+    document.getElementById('rechunkModal').style.display = 'flex';
+};
+
+function closeRechunkModal() {
+    document.getElementById('rechunkModal').style.display = 'none';
+    _rechunkFilename = null;
+}
+
+function updateRechunkSizeVisibility() {
+    const method = document.getElementById('rechunkMethod').value;
+    const show = method === 'fixed' || method === 'recursive';
+    document.getElementById('rechunkSizeFields').style.display = show ? '' : 'none';
+}
+
+async function confirmRechunk() {
+    if (!_rechunkFilename) return;
+
+    const method = document.getElementById('rechunkMethod').value;
+    const size = parseInt(document.getElementById('rechunkSize').value) || 500;
+    const overlap = parseInt(document.getElementById('rechunkOverlap').value) || 50;
+    const hint = document.getElementById('rechunkHint');
+    const btn = document.getElementById('rechunkConfirmBtn');
+
+    hint.style.color = 'var(--text-secondary)';
+    hint.textContent = '正在重新切分，请稍候...';
+    btn.disabled = true;
+
+    try {
+        const res = await fetch(`${API_BASE}/api/document/rechunk`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                filename: _rechunkFilename,
+                kb_id: state.currentDocsKbId || 'knowledge_base',
+                chunk_method: method,
+                chunk_size: size,
+                chunk_overlap: overlap,
+            }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+            hint.style.color = 'var(--success)';
+            hint.textContent = `✅ ${data.message}`;
+            setTimeout(() => {
+                closeRechunkModal();
+                loadDocuments(state.currentDocsKbId);
+                updateStats();
+            }, 1200);
+        } else {
+            hint.style.color = 'var(--danger)';
+            hint.textContent = '失败: ' + (data.detail || data.message);
+            btn.disabled = false;
+        }
+    } catch (e) {
+        hint.style.color = 'var(--danger)';
+        hint.textContent = '请求失败: ' + e.message;
+        btn.disabled = false;
+    }
 }

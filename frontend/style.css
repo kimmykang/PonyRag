@@ -2534,3 +2534,14 @@ body {
     background: rgba(251, 191, 36, 0.15);
     color: var(--warning);
 }
+
+/* 切分类型标签可点击 */
+.chunk-tag-clickable {
+    cursor: pointer;
+    transition: opacity 0.15s, box-shadow 0.15s;
+}
+
+.chunk-tag-clickable:hover {
+    opacity: 0.85;
+    box-shadow: 0 0 0 2px var(--primary);
+}

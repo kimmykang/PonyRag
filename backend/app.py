@@ -1765,6 +1765,84 @@ async def download_document(filename: str, kb_id: str = "knowledge_base"):
     )
 
 
+class RechunkRequest(BaseModel):
+    filename: str          # 显示文件名（如 report.pdf）
+    kb_id: str = "knowledge_base"
+    chunk_method: str = "recursive"
+    chunk_size: int = 500
+    chunk_overlap: int = 50
+
+
+@app.post("/api/document/rechunk")
+async def rechunk_document(req: RechunkRequest):
+    """
+    重新切分指定文档：先删除旧向量，再用新参数重新切分并入库。
+    """
+    import config as _cfg
+
+    kb = get_kb(req.kb_id)
+    if not kb:
+        raise HTTPException(status_code=404, detail=f"知识库 {req.kb_id} 不存在")
+
+    kb_dir = get_kb_upload_dir(req.kb_id)
+
+    # 确定 .md 文件名
+    stem = Path(req.filename).stem
+    md_filename = stem + ".md"
+    md_path = kb_dir / md_filename
+
+    if not md_path.exists():
+        raise HTTPException(status_code=404, detail=f"找不到文档的 .md 文件: {md_filename}")
+
+    # 参数校验
+    if req.chunk_method not in ("fixed", "recursive", "markdown", "semantic"):
+        raise HTTPException(status_code=400, detail="chunk_method 无效")
+    if req.chunk_size < 100 or req.chunk_size > 2000:
+        raise HTTPException(status_code=400, detail="chunk_size 范围: 100~2000")
+    if req.chunk_overlap < 0 or req.chunk_overlap >= req.chunk_size:
+        raise HTTPException(status_code=400, detail="chunk_overlap 必须小于 chunk_size")
+
+    # 步骤1：删除旧向量
+    engine = get_rag_engine(req.kb_id)
+    removed = engine.delete_document(md_filename)
+    print(f"[Rechunk] 已删除旧向量: {md_filename} ({removed} 块)")
+
+    # 步骤2：重新切分
+    texts = parse_document(str(md_path))
+    if not texts:
+        raise HTTPException(status_code=400, detail="文档为空或无法解析")
+
+    chunks = chunk_texts(
+        texts,
+        is_markdown=True,
+        method=req.chunk_method,
+        chunk_size=req.chunk_size,
+        chunk_overlap=req.chunk_overlap,
+    )
+    if not chunks:
+        raise HTTPException(status_code=400, detail="文档分块失败")
+
+    # 步骤3：入库
+    engine.ingest_document(md_filename, chunks)
+
+    # 步骤4：更新 SQLite 切分记录
+    save_doc_chunk_record(
+        kb_id=req.kb_id, filename=md_filename,
+        embed_model=_cfg.EMBED_MODEL,
+        chunk_method=req.chunk_method,
+        chunk_size=req.chunk_size,
+        chunk_overlap=req.chunk_overlap,
+        chunk_count=len(chunks),
+    )
+
+    print(f"[Rechunk] ✅ {md_filename}: method={req.chunk_method}, size={req.chunk_size}, {len(chunks)} 块")
+    return {
+        "status": "success",
+        "message": f"重新切分完成: {len(chunks)} 块",
+        "chunk_count": len(chunks),
+    }
+
+
 @app.get("/api/config/rag-params")
 async def get_rag_params():
     """
