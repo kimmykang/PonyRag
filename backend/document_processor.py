@@ -17,13 +17,15 @@
   - langchain-community TextLoader：读取 .md 文本
   - langchain-text-splitters：文档分块
 """
+import re
 import subprocess
+import httpx
 from pathlib import Path
 from typing import List
 
 from langchain_community.document_loaders import TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from config import CHUNK_SIZE, CHUNK_OVERLAP, UPLOAD_DIR, OLLAMA_BASE_URL, OCR_MODEL
+from config import CHUNK_SIZE, CHUNK_OVERLAP, UPLOAD_DIR, OLLAMA_BASE_URL, OCR_MODEL, EMBED_MODEL
 
 # ──────────────────────────────────────────────────────────────
 # 支持的文件格式集合
@@ -170,39 +172,219 @@ def parse_document(file_path: str) -> List[str]:
 # 文本分块
 # ──────────────────────────────────────────────────────────────
 
-def chunk_texts(texts: List[str], is_markdown: bool = True) -> List[str]:
+def chunk_texts(
+    texts: List[str],
+    is_markdown: bool = True,
+    method: str = None,
+    chunk_size: int = None,
+    chunk_overlap: int = None,
+) -> List[str]:
     """
     将文本列表切分为固定大小的语义块，供向量化存储。
 
-    分块策略（Markdown 模式）：
-      优先按标题层级（##、###、####）分割，保持章节完整性；
-      章节过长时再按段落（双换行）→ 单行 → 标点逐级细分。
+    参数优先级：显式传入 > config.CHUNK_METHOD / CHUNK_SIZE / CHUNK_OVERLAP
+
+    切分策略（method）：
+      fixed     — 严格按字符数截断，块大小最均匀
+      recursive — 递归字符切分（默认），优先按标点/空行逐级细分
+      markdown  — 按 Markdown 标题树切分，保留章节上下文
+      semantic  — 语义相似度切分，块大小不固定（较慢）
 
     Args:
-        texts:       待切分的文本字符串列表
-        is_markdown: 是否使用 Markdown 语义分隔符（默认 True）
+        texts:        待切分的文本字符串列表
+        is_markdown:  是否为 Markdown 格式（影响 recursive 的分隔符）
+        method:       切分方式，None 则读 config.CHUNK_METHOD
+        chunk_size:   分块大小，None 则读 config.CHUNK_SIZE
+        chunk_overlap:重叠大小，None 则读 config.CHUNK_OVERLAP
 
     Returns:
-        切分后的文本块列表（每块长度不超过 CHUNK_SIZE token）
+        切分后的文本块列表
     """
+    from config import CHUNK_METHOD, CHUNK_SIZE, CHUNK_OVERLAP
+    _method  = (method        or CHUNK_METHOD).strip().lower()
+    _size    = chunk_size    if chunk_size    is not None else CHUNK_SIZE
+    _overlap = chunk_overlap if chunk_overlap is not None else CHUNK_OVERLAP
+
+    print(f"[Chunker] method={_method}, chunk_size={_size}, chunk_overlap={_overlap}, texts={len(texts)}")
+
+    if _method == "fixed":
+        return _chunk_fixed(texts, _size, _overlap)
+    elif _method == "markdown":
+        return _chunk_by_markdown_headers(texts, _size, _overlap)
+    elif _method == "semantic":
+        return _chunk_by_semantic(texts, _size, _overlap)
+    else:
+        return _chunk_recursive(texts, is_markdown, _size, _overlap)
+
+
+def _chunk_fixed(texts: List[str], chunk_size: int = None, chunk_overlap: int = None) -> List[str]:
+    """固定大小切分，严格按字符数，不寻找语义边界。"""
+    from config import CHUNK_SIZE, CHUNK_OVERLAP
+    _size    = chunk_size    if chunk_size    is not None else CHUNK_SIZE
+    _overlap = chunk_overlap if chunk_overlap is not None else CHUNK_OVERLAP
+    from langchain_text_splitters import CharacterTextSplitter
+    splitter = CharacterTextSplitter(
+        separator="",
+        chunk_size=_size * 3,
+        chunk_overlap=_overlap * 3,
+        length_function=len,
+    )
+    chunks = []
+    for text in texts:
+        chunks.extend(splitter.split_text(text))
+    return chunks
+
+
+def _chunk_recursive(texts: List[str], is_markdown: bool = True, chunk_size: int = None, chunk_overlap: int = None) -> List[str]:
+    """递归字符切分，优先按标点/空行逐级细分。"""
+    from config import CHUNK_SIZE, CHUNK_OVERLAP
+    _size    = chunk_size    if chunk_size    is not None else CHUNK_SIZE
+    _overlap = chunk_overlap if chunk_overlap is not None else CHUNK_OVERLAP
+
     if is_markdown:
-        # Markdown 专用分隔符：优先按标题层级切分，保留文档结构
         separators = ["\n## ", "\n### ", "\n#### ", "\n\n", "\n", "。", ".", " ", ""]
     else:
-        # 普通文本分隔符
         separators = ["\n\n", "\n", "。", ".", "；", ";", " ", ""]
 
-    # 使用 tiktoken 计算 token 数（与 LLM 的 token 计算方式一致）
     splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
-        chunk_size=CHUNK_SIZE,      # 每块最大 token 数
-        chunk_overlap=CHUNK_OVERLAP, # 相邻块重叠 token 数，防止语义截断
+        chunk_size=_size,
+        chunk_overlap=_overlap,
         separators=separators,
+    )
+    chunks = []
+    for text in texts:
+        chunks.extend(splitter.split_text(text))
+    return chunks
+
+
+def _chunk_by_markdown_headers(texts: List[str], chunk_size: int = None, chunk_overlap: int = None) -> List[str]:
+    """
+    Markdown 标题树切分。按 #/##/###/#### 切出章节，标题路径拼入块开头，超长章节二次切分。
+    """
+    from config import CHUNK_SIZE, CHUNK_OVERLAP
+    _size    = chunk_size    if chunk_size    is not None else CHUNK_SIZE
+    _overlap = chunk_overlap if chunk_overlap is not None else CHUNK_OVERLAP
+
+    from langchain_text_splitters import MarkdownHeaderTextSplitter
+
+    headers_to_split = [
+        ("#",    "h1"),
+        ("##",   "h2"),
+        ("###",  "h3"),
+        ("####", "h4"),
+    ]
+    md_splitter = MarkdownHeaderTextSplitter(
+        headers_to_split_on=headers_to_split,
+        strip_headers=False,
+    )
+
+    secondary = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
+        chunk_size=_size,
+        chunk_overlap=_overlap,
+        separators=["\n\n", "\n", "。", ".", " ", ""],
     )
 
     chunks = []
     for text in texts:
-        chunk_list = splitter.split_text(text)
-        chunks.extend(chunk_list)
+        md_docs = md_splitter.split_text(text)
+        for doc in md_docs:
+            meta = doc.metadata
+            title_path = " > ".join(v for k, v in sorted(meta.items()) if v) if meta else ""
+            content = doc.page_content.strip()
+            if not content:
+                continue
+            full_chunk = f"[{title_path}]\n{content}" if title_path else content
+            chunks.extend(secondary.split_text(full_chunk))
+
+    if not chunks:
+        print("[Chunker] markdown 模式未找到标题，降级到 recursive")
+        return _chunk_recursive(texts, is_markdown=True, chunk_size=_size, chunk_overlap=_overlap)
+
+    return chunks
+
+
+def _chunk_by_semantic(texts: List[str], chunk_size: int = None, chunk_overlap: int = None) -> List[str]:
+    """
+    语义相似度切分。按句拆分 → Ollama embedding → 余弦相似度找跳变点 → 超长段二次截断。
+    """
+    from config import CHUNK_SIZE, CHUNK_OVERLAP
+    _size    = chunk_size    if chunk_size    is not None else CHUNK_SIZE
+    _overlap = chunk_overlap if chunk_overlap is not None else CHUNK_OVERLAP
+
+    # ── 句子分割 ────────────────────────────────────────────────
+    all_sentences: List[str] = []
+    for text in texts:
+        sents = re.split(r'(?<=[。！？\.\!\?])\s*|\n+', text)
+        all_sentences.extend([s.strip() for s in sents if s.strip()])
+
+    if not all_sentences:
+        return []
+
+    # ── 生成 embedding ──────────────────────────────────────────
+    def _embed_batch(batch: List[str]) -> List[List[float]]:
+        """调用 Ollama /api/embed 批量生成向量"""
+        try:
+            with httpx.Client(transport=httpx.HTTPTransport(), timeout=60) as client:
+                resp = client.post(
+                    f"{OLLAMA_BASE_URL}/api/embed",
+                    json={"model": EMBED_MODEL, "input": batch},
+                )
+                resp.raise_for_status()
+                return resp.json().get("embeddings", [])
+        except Exception as e:
+            print(f"[SemanticChunker] embedding 失败: {e}")
+            return []
+
+    # 分批嵌入，每批 32 句，避免请求过大
+    BATCH = 32
+    embeddings = []
+    for i in range(0, len(all_sentences), BATCH):
+        batch = all_sentences[i:i + BATCH]
+        vecs = _embed_batch(batch)
+        if not vecs:
+            print("[SemanticChunker] embedding 失败，降级到 recursive")
+            return _chunk_recursive(texts, is_markdown=True, chunk_size=_size, chunk_overlap=_overlap)
+        embeddings.extend(vecs)
+
+    # ── 计算相邻余弦相似度，找切割点 ──────────────────────────
+    import math
+
+    def _cosine(a: List[float], b: List[float]) -> float:
+        dot = sum(x * y for x, y in zip(a, b))
+        na  = math.sqrt(sum(x * x for x in a))
+        nb  = math.sqrt(sum(x * x for x in b))
+        return dot / (na * nb) if na * nb > 0 else 0.0
+
+    THRESHOLD = 0.72
+    segments: List[str] = []
+    current: List[str] = [all_sentences[0]]
+
+    for i in range(1, len(all_sentences)):
+        sim = _cosine(embeddings[i - 1], embeddings[i])
+        if sim < THRESHOLD:
+            segments.append(" ".join(current))
+            current = [all_sentences[i]]
+        else:
+            current.append(all_sentences[i])
+
+    if current:
+        segments.append(" ".join(current))
+
+    # ── 二次截断：超过 _size 的段落切小 ──────────────────
+    secondary = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
+        chunk_size=_size,
+        chunk_overlap=_overlap,
+        separators=["\n\n", "\n", "。", ".", " ", ""],
+    )
+    chunks = []
+    for seg in segments:
+        if seg.strip():
+            chunks.extend(secondary.split_text(seg))
+
+    if not chunks:
+        return _chunk_recursive(texts, is_markdown=True, chunk_size=_size, chunk_overlap=_overlap)
+
+    print(f"[SemanticChunker] 切分完成: {len(all_sentences)} 句 → {len(segments)} 语义段 → {len(chunks)} 块")
     return chunks
 
 
@@ -342,32 +524,58 @@ def cleanup_document(filename: str, upload_dir: str = None) -> bool:
     """
     删除指定文档文件，同时删除其 markitdown 转换产生的 .md 文件（如有）。
 
-    注意：此函数只删除磁盘文件，向量库中的对应数据由
-    app.py 的 delete_document 接口单独调用 vector_store.delete_by_source 清理。
+    Windows 文件锁处理：
+      - 先做垃圾回收释放可能的 Python 文件句柄
+      - 若 unlink 失败，最多重试 3 次（间隔 0.5 秒）
+      - 3 次都失败则只删 .md，原始文件跳过（不抛异常），打印警告
 
     Args:
         filename:   要删除的文件名（仅文件名，不含目录路径）
         upload_dir: 上传目录路径，默认使用 config.UPLOAD_DIR
 
     Returns:
-        True 表示原始文件已成功删除，False 表示文件不存在
+        True 表示原始文件已成功删除或不存在，False 表示文件存在但被锁定无法删除
     """
+    import gc, time
+
     if upload_dir is None:
         upload_dir = UPLOAD_DIR
-    
+
     upload_path = Path(upload_dir)
-    doc_path = upload_path / filename
-    deleted = False
+    doc_path    = upload_path / filename
+    deleted     = False
 
-    # 删除原始文件
+    # 先做一次 GC，释放可能残留的 Python 文件句柄（markitdown 转换后可能未释放）
+    gc.collect()
+
+    # 删除原始文件（带重试）
     if doc_path.exists():
-        doc_path.unlink()
-        deleted = True
+        for attempt in range(3):
+            try:
+                doc_path.unlink()
+                deleted = True
+                break
+            except PermissionError as e:
+                if attempt < 2:
+                    print(f"[Cleanup] 文件被锁定，等待重试 ({attempt+1}/3): {doc_path.name}")
+                    time.sleep(0.5)
+                    gc.collect()
+                else:
+                    print(f"[Cleanup] ⚠️ 无法删除原始文件（文件被其他程序占用），跳过: {doc_path.name} — {e}")
+                    # 不抛异常，继续尝试删 .md
 
-    # 若原始文件不是 .md，则同步删除自动生成的同名 .md
+    # 若原始文件不是 .md，同步删除自动生成的同名 .md
     if Path(filename).suffix.lower() != ".md":
         md_path = upload_path / (Path(filename).stem + ".md")
         if md_path.exists():
-            md_path.unlink()
+            for attempt in range(3):
+                try:
+                    md_path.unlink()
+                    break
+                except PermissionError:
+                    if attempt < 2:
+                        time.sleep(0.3)
+                    else:
+                        print(f"[Cleanup] ⚠️ 无法删除 .md 文件: {md_path.name}")
 
     return deleted

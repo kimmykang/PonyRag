@@ -98,6 +98,12 @@ function initEventListeners() {
     document.getElementById('docsModal').addEventListener('click', (e) => {
         if (e.target.id === 'docsModal') closeDocsModal();
     });
+
+    // 切分参数面板：切分方式切换时动态显隐大小/重叠输入框，更新徽章
+    const uploadMethodSel = document.getElementById('uploadChunkMethod');
+    if (uploadMethodSel) {
+        uploadMethodSel.addEventListener('change', _updateUploadChunkPanel);
+    }
 }
 
 function toggleSidebar() {
@@ -502,27 +508,40 @@ async function loadDocuments(kbId) {
 
     try {
         console.log('开始加载文档，kb_id:', kbId);
-        const res = await fetch(`${API_BASE}/api/documents?kb_id=${encodeURIComponent(kbId)}`);
-        console.log('API 响应状态:', res.status);
+        const [res, recRes] = await Promise.all([
+            fetch(`${API_BASE}/api/documents?kb_id=${encodeURIComponent(kbId)}`),
+            fetch(`${API_BASE}/api/documents/chunk-records?kb_id=${encodeURIComponent(kbId)}`),
+        ]);
 
         const data = await res.json();
-        console.log('API 返回数据:', data);
+        const recData = recRes.ok ? await recRes.json() : {
+            records: []
+        };
 
-        if (!res.ok) {
-            throw new Error(data.detail || '加载失败');
-        }
+        if (!res.ok) throw new Error(data.detail || '加载失败');
 
-        // 后端返回的字段是 filename, created，需要转换为 name, upload_time
-        state.documents = (data.documents || []).map(doc => ({
-            name: doc.filename || doc.name,
-            upload_time: doc.upload_time || (doc.created ? new Date(doc.created * 1000).toLocaleString('zh-CN') : '未知'),
-            size: doc.size,
-            md_ready: doc.md_ready
-        }));
+        // 构建切分记录 map：filename → record
+        const chunkRecMap = {};
+        (recData.records || []).forEach(r => {
+            chunkRecMap[r.filename] = r;
+        });
+
+        state.documents = (data.documents || []).map(doc => {
+            const mdName = (doc.filename || doc.name).replace(/\.[^.]+$/, '.md');
+            const rec = chunkRecMap[mdName] || null;
+            return {
+                name: doc.filename || doc.name,
+                upload_time: doc.upload_time || (doc.created ? new Date(doc.created * 1000).toLocaleString('zh-CN') : '未知'),
+                size: doc.size,
+                md_ready: doc.md_ready,
+                chunk_method: rec ? rec.chunk_method : null,
+                chunk_size: rec ? rec.chunk_size : null,
+                chunk_count: rec ? rec.chunk_count : null,
+                up_to_date: rec ? rec.up_to_date : null,
+            };
+        });
 
         console.log('成功加载文档数量:', state.documents.length);
-        console.log('转换后的文档数据:', state.documents[0]);
-
         renderDocuments();
     } catch (e) {
         console.error('加载文档列表失败:', e);
@@ -550,6 +569,13 @@ function renderDocuments() {
     }
 
     // 表格HTML
+    const METHOD_LABEL = {
+        'fixed': '✂️ 固定',
+        'recursive': '🔀 递归',
+        'markdown': '📑 标题树',
+        'semantic': '🧠 语义',
+    };
+
     let tableHTML = `
         <table class="docs-table">
             <thead>
@@ -559,7 +585,8 @@ function renderDocuments() {
                     </th>
                     <th style="width: 60px;"></th>
                     <th>文件名</th>
-                    <th style="width: 220px;">上传时间</th>
+                    <th style="width: 130px;">切分类型</th>
+                    <th style="width: 180px;">上传时间</th>
                     <th style="width: 80px; text-align: center;">操作</th>
                 </tr>
             </thead>
@@ -590,7 +617,22 @@ function renderDocuments() {
                     ${fileIcon}
                 </td>
                 <td class="doc-name-cell" title="${safeName}">
-                    ${safeName}
+                    <a href="${API_BASE}/api/document/download?filename=${encodeURIComponent(safeName)}&kb_id=${encodeURIComponent(state.currentDocsKbId || 'knowledge_base')}"
+                       target="_blank"
+                       style="color: inherit; text-decoration: none;"
+                       onmouseover="this.style.textDecoration='underline'"
+                       onmouseout="this.style.textDecoration='none'">
+                        ${safeName}
+                    </a>
+                </td>
+                <td class="doc-chunk-cell">
+                    ${doc.chunk_method
+                        ? `<span class="chunk-method-tag ${doc.up_to_date === false ? 'stale' : ''}" title="切分大小: ${doc.chunk_size}, 块数: ${doc.chunk_count}">
+                               ${METHOD_LABEL[doc.chunk_method] || doc.chunk_method}
+                               <span class="chunk-count">${doc.chunk_count}块</span>
+                           </span>`
+                        : '<span class="chunk-method-tag none" title="上传于切分记录功能加入之前，实际使用递归切分">旧版·递归</span>'
+                    }
                 </td>
                 <td class="doc-time-cell">
                     ${doc.upload_time || '未知'}
@@ -749,7 +791,20 @@ async function handleDocsUpload(event) {
             const formData = new FormData();
             formData.append('file', file);
 
-            const res = await fetch(`${API_BASE}/api/upload?kb_id=${encodeURIComponent(kbId)}`, {
+            // 读取上传时指定的切分参数（空则使用全局配置）
+            const uploadMethodEl = document.getElementById('uploadChunkMethod');
+            const uploadSizeEl = document.getElementById('uploadChunkSize');
+            const uploadOverlapEl = document.getElementById('uploadChunkOverlap');
+            const chunkMethod = uploadMethodEl ? uploadMethodEl.value : '';
+            const chunkSize = uploadSizeEl ? uploadSizeEl.value : '';
+            const chunkOverlap = uploadOverlapEl ? uploadOverlapEl.value : '';
+
+            let uploadUrl = `${API_BASE}/api/upload?kb_id=${encodeURIComponent(kbId)}`;
+            if (chunkMethod) uploadUrl += `&chunk_method=${encodeURIComponent(chunkMethod)}`;
+            if (chunkSize) uploadUrl += `&chunk_size=${encodeURIComponent(chunkSize)}`;
+            if (chunkOverlap) uploadUrl += `&chunk_overlap=${encodeURIComponent(chunkOverlap)}`;
+
+            const res = await fetch(uploadUrl, {
                 method: 'POST',
                 body: formData,
             });
@@ -983,3 +1038,31 @@ window.testModalOpen = function() {
         alert('请先创建一个知识库');
     }
 };
+
+// ── 上传切分参数面板 ─────────────────────────────────────────
+
+/**
+ * 切分方式变化时：更新徽章文字、显隐大小/重叠输入框
+ */
+function _updateUploadChunkPanel() {
+    const methodEl = document.getElementById('uploadChunkMethod');
+    const method = methodEl ? methodEl.value : '';
+    const badge = document.getElementById('uploadChunkBadge');
+    const sizeRow = document.getElementById('uploadSizeRow');
+    const overRow = document.getElementById('uploadOverlapRow');
+
+    const METHOD_NAMES = {
+        '': '使用全局设置',
+        'fixed': '固定切分',
+        'recursive': '递归切分',
+        'markdown': '标题树切分',
+        'semantic': '语义切分',
+    };
+
+    if (badge) badge.textContent = METHOD_NAMES[method] || method;
+
+    // 标题树 / 语义切分不需要大小和重叠
+    const showSize = method === '' || method === 'fixed' || method === 'recursive';
+    if (sizeRow) sizeRow.style.display = showSize ? '' : 'none';
+    if (overRow) overRow.style.display = showSize ? '' : 'none';
+}

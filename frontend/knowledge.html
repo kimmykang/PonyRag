@@ -218,6 +218,40 @@
                     </button>
                 </div>
 
+                <!-- 切分参数面板（折叠） -->
+                <details class="upload-chunk-panel" id="uploadChunkPanel">
+                    <summary class="upload-chunk-toggle">
+                        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="9 18 15 12 9 6"></polyline>
+                        </svg>
+                        切分参数
+                        <span class="upload-chunk-badge" id="uploadChunkBadge">使用全局设置</span>
+                    </summary>
+                    <div class="upload-chunk-body">
+                        <!-- 切分方式 -->
+                        <div class="upload-chunk-row">
+                            <label class="upload-chunk-label">切分方式</label>
+                            <select id="uploadChunkMethod" class="upload-chunk-select">
+                                <option value="">— 使用全局设置 —</option>
+                                <option value="fixed">✂️ 固定切分 · 适合：纯文本、日志、数据导出</option>
+                                <option value="recursive">🔀 递归切分（推荐）· 适合：通用文档</option>
+                                <option value="markdown">📑 标题树切分 · 适合：保险条款、产品手册</option>
+                                <option value="semantic">🧠 语义切分（较慢）· 适合：文章、报告、书籍</option>
+                            </select>
+                        </div>
+                        <!-- 分块大小 -->
+                        <div class="upload-chunk-row" id="uploadSizeRow">
+                            <label class="upload-chunk-label">分块大小 <span class="upload-chunk-hint">token</span></label>
+                            <input type="number" id="uploadChunkSize" class="upload-chunk-num" min="100" max="2000" step="50" placeholder="全局">
+                        </div>
+                        <!-- 分块重叠 -->
+                        <div class="upload-chunk-row" id="uploadOverlapRow">
+                            <label class="upload-chunk-label">分块重叠 <span class="upload-chunk-hint">token</span></label>
+                            <input type="number" id="uploadChunkOverlap" class="upload-chunk-num" min="0" max="500" step="10" placeholder="全局">
+                        </div>
+                    </div>
+                </details>
+
                 <!-- 上传进度 -->
                 <div class="upload-progress" id="docsUploadProgress" style="display:none; margin: 12px 0;">
                     <div class="progress-bar">

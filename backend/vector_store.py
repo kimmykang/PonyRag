@@ -138,10 +138,17 @@ class VectorStoreManager:
         new_chunks = [chunks[i]    for i in new_indices]
         new_metas  = [metadatas[i] for i in new_indices]
 
-        # 在应用层生成向量（绕过 ChromaDB EmbeddingFunction 接口限制）
-        vectors = self.embeddings.embed_documents(new_chunks)
+        # 分批生成向量（每批 50 个），避免 Ollama 单次请求超时
+        # 526 个 chunk 一次性 embed 容易超时；50 个一批约 2~5 秒，稳定可靠
+        EMBED_BATCH = 50
+        vectors = []
+        for i in range(0, len(new_chunks), EMBED_BATCH):
+            batch = new_chunks[i:i + EMBED_BATCH]
+            print(f"[VectorStore] embedding {i+1}~{i+len(batch)}/{len(new_chunks)} chunks...")
+            batch_vecs = self.embeddings.embed_documents(batch)
+            vectors.extend(batch_vecs)
 
-        # 分批写入，每批最多 100 条，避免单次写入过大导致 Rust 层崩溃
+        # 分批写入 ChromaDB，每批最多 100 条，避免 Rust 层崩溃
         BATCH_SIZE = 100
         for start in range(0, len(new_ids), BATCH_SIZE):
             end = start + BATCH_SIZE
@@ -229,11 +236,20 @@ class VectorStoreManager:
             if "dimension" in err_msg.lower() or "embedding" in err_msg.lower():
                 print(f"[VectorStore] 检索时维度不匹配，集合 {collection_name} 可能使用旧模型创建")
                 print(f"[VectorStore] 错误详情: {err_msg}")
-                print(f"[VectorStore] 建议：在设置页面切换回原模型，或重新创建此知识库")
-                # 返回空结果，避免阻塞整个聊天流程
-                return []
+                # 记录到 .pending_delete，下次启动自动清理
+                try:
+                    from pathlib import Path as _Path
+                    from config import VECTOR_DB_PATH as _VDB
+                    pending = _Path(_VDB) / ".pending_delete"
+                    existing = set(pending.read_text(encoding="utf-8").splitlines()) if pending.exists() else set()
+                    existing.add(collection_name)
+                    pending.write_text("\n".join(sorted(existing)), encoding="utf-8")
+                    print(f"[VectorStore] 已记录到 .pending_delete，下次启动将自动清理: {collection_name}")
+                except Exception as pe:
+                    print(f"[VectorStore] 写入 .pending_delete 失败: {pe}")
+                # 抛出异常让上层感知，而不是静默返回空
+                raise
             else:
-                # 其他错误正常抛出
                 raise
 
         # 将 ChromaDB 结果转换为 LangChain Document 对象

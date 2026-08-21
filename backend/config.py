@@ -72,6 +72,12 @@ CHUNK_SIZE: int = int(os.getenv("CHUNK_SIZE", "500"))
 # 相邻分块的重叠 token 数，防止语义断裂
 CHUNK_OVERLAP: int = int(os.getenv("CHUNK_OVERLAP", "50"))
 
+# 文档分块方式：
+#   recursive  — 递归字符切分（默认，按标点/空行逐级细分）
+#   markdown   — 按 Markdown 标题树结构切分（适合结构化文档）
+#   semantic   — 语义相似度切分（用 embedding 判断段落边界，适合叙事型文档）
+CHUNK_METHOD: str = os.getenv("CHUNK_METHOD", "recursive")
+
 # ──────────────────────────────────────────────────────────────
 # 初始化：确保必要目录存在
 # ──────────────────────────────────────────────────────────────

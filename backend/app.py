@@ -73,6 +73,8 @@ from chat_history import init_db, save_message, get_history, clear_history
 from knowledge_base import (
     init_kb_table, create_kb, get_kb, list_kbs, list_enabled_kbs,
     update_kb, delete_kb, get_kb_upload_dir, get_kb_index_marker,
+    save_doc_chunk_record, get_doc_chunk_record, delete_doc_chunk_record,
+    delete_all_doc_chunk_records, get_docs_needing_reindex, list_doc_chunk_records,
 )
 
 # 索引标记文件路径：记录哪些 .md 文件已入库（默认知识库兼容旧格式）
@@ -609,6 +611,12 @@ def _batch_ingest(upload_dir: str, kb_id: str = "knowledge_base"):
                     errors.append(f"{f.name}: convert failed: {e}")
 
     # ── 阶段 2：以 .md 文件为标的入库 ──────────────────────────
+    import config as _cfg
+    current_embed  = _cfg.EMBED_MODEL
+    current_method = getattr(_cfg, "CHUNK_METHOD",  "recursive")
+    current_size   = _cfg.CHUNK_SIZE
+    current_overlap= _cfg.CHUNK_OVERLAP
+
     for f in sorted(dir_path.iterdir()):
         if not f.is_file() or f.suffix.lower() != ".md" or f.name.startswith("."):
             continue
@@ -620,13 +628,40 @@ def _batch_ingest(upload_dir: str, kb_id: str = "knowledge_base"):
             if not texts:
                 errors.append(f"{f.name}: empty")
                 continue
-            chunks = chunk_texts(texts, is_markdown=True)
+
+            # 优先读 SQLite 中该文档的历史切分参数，没有则用全局配置
+            rec = get_doc_chunk_record(kb_id, f.name)
+            if rec:
+                doc_method  = rec["chunk_method"]
+                doc_size    = rec["chunk_size"]
+                doc_overlap = rec["chunk_overlap"]
+            else:
+                doc_method  = current_method
+                doc_size    = current_size
+                doc_overlap = current_overlap
+
+            chunks = chunk_texts(
+                texts,
+                is_markdown=True,
+                method=doc_method,
+                chunk_size=doc_size,
+                chunk_overlap=doc_overlap,
+            )
             if not chunks:
                 errors.append(f"{f.name}: chunk failed")
                 continue
             get_rag_engine(kb_id).ingest_document(f.name, chunks)
             indexed.add(f.name)
             _save_indexed(indexed, kb_id)
+            # 写入/更新切分记录
+            save_doc_chunk_record(
+                kb_id=kb_id, filename=f.name,
+                embed_model=current_embed,
+                chunk_method=doc_method,
+                chunk_size=doc_size,
+                chunk_overlap=doc_overlap,
+                chunk_count=len(chunks),
+            )
             ingested += 1
         except Exception as e:
             errors.append(f"{f.name}: {e}")
@@ -678,42 +713,65 @@ def _purge_vector_db():
     """
     彻底清空向量数据库：显式删除所有 ChromaDB 集合，再删除整个目录。
     同时清空所有知识库的 .indexed 标记，以便重新索引。
+
+    Windows 文件锁处理：
+      若 rmtree 失败，将残留的集合名写入 .pending_delete 文件，
+      下次启动时 _check_embed_model_consistency 会重试删除。
     """
     import shutil, time, chromadb as _chromadb
+    import config as _cfg
 
     vector_db_path = Path(VECTOR_DB_PATH)
+    failed_collections = []
 
     # 先用 ChromaDB API 删除所有集合（清除 SQLite 元数据中的维度信息）
     if vector_db_path.exists():
         try:
             _tmp = _chromadb.PersistentClient(path=str(vector_db_path))
-            for col in _tmp.list_collections():
+            all_cols = [c.name for c in _tmp.list_collections()]
+            for col_name in all_cols:
                 try:
-                    _tmp.delete_collection(col.name)
-                    print(f"[Purge] 已删除集合: {col.name}")
+                    _tmp.delete_collection(col_name)
+                    print(f"[Purge] 已删除集合: {col_name}")
                 except Exception as e:
-                    print(f"[Purge] 删除集合 {col.name} 失败: {e}")
+                    print(f"[Purge] 删除集合 {col_name} 失败: {e}")
+                    failed_collections.append(col_name)
             del _tmp
             time.sleep(0.3)
         except Exception as e:
             print(f"[Purge] ChromaDB 清理失败: {e}")
 
         # 再删目录（清除物理文件）
+        time.sleep(0.3)
         try:
-            time.sleep(0.3)
-            shutil.rmtree(str(vector_db_path), ignore_errors=True)
-            print(f"[Purge] 已删除 vector_db 目录")
+            shutil.rmtree(str(vector_db_path))   # 不用 ignore_errors，让异常暴露
+            print(f"[Purge] 已删除 vector_db 目录: {vector_db_path.resolve()}")
+            failed_collections = []  # 目录删成功，没有残留
         except Exception as e:
-            print(f"[Purge] 删除目录失败（可能有文件锁）: {e}")
+            print(f"[Purge] ⚠️ 删除目录失败（Windows 文件锁）")
+            print(f"[Purge]   目录: {vector_db_path.resolve()}")
+            print(f"[Purge]   错误: {e}")
+            print(f"[Purge] 集合元数据已通过 API 清除，物理文件残留不影响后续使用")
 
-    # 重建目录，写入当前模型标记
+    # 重建目录
     vector_db_path.mkdir(parents=True, exist_ok=True)
-    (vector_db_path / ".embed_model").write_text(EMBED_MODEL, encoding="utf-8")
+    # 注意：.embed_model 由调用方在合适时机写入，这里不写，确保重启时能检测到变更
+    # (vector_db_path / ".embed_model").write_text(_cfg.EMBED_MODEL, encoding="utf-8")
+
+    # 若有残留集合，写入 .pending_delete 文件，等下次启动重试
+    # pending_file = vector_db_path / ".pending_delete"
+    # if failed_collections:
+    #     pending_file.write_text("\n".join(failed_collections), encoding="utf-8")
+    #     print(f"[Purge] ⚠️ 以下集合删除失败，已记录待下次启动重试: {failed_collections}")
+    # else:
+    #     if pending_file.exists():
+    #         pending_file.unlink()
 
     # 清空所有知识库的 .indexed 标记，强制重新索引
     for kb in list_kbs():
         _save_indexed(set(), kb["kb_id"])
-    print(f"[Purge] 清空完成，当前模型: {EMBED_MODEL}")
+        delete_all_doc_chunk_records(kb["kb_id"])
+    print(f"[Purge] 清空完成，当前模型: {_cfg.EMBED_MODEL}")
 
 
 def _check_embed_model_consistency():
@@ -721,105 +779,137 @@ def _check_embed_model_consistency():
     启动时检查 embedding 模型与向量库的一致性。
 
     两层检查：
-      1. 模型名称检查：比较 .embed_model 标记与 .env 中的 EMBED_MODEL
-      2. 维度健全性检查：直接读 ChromaDB 的 SQLite 文件，获取已存储的向量维度，
-         与当前模型的已知维度对比（防止 Windows 文件锁导致 rmtree 不完整）
+      1. 模型名称：比较 .embed_model 标记与当前 EMBED_MODEL
+      2. 维度健全性：读 ChromaDB SQLite 的实际存储维度，防止 Windows 文件锁
+         导致 rmtree 不完整、旧维度残留
 
-    只要发现任何不一致，就调用 _purge_vector_db() 彻底清空并触发重索引。
-    不依赖 Ollama HTTP（启动时模型可能还未就绪）。
+    额外：处理上次切换模型时因文件锁未能删除的残留集合（.pending_delete）
     """
+    import config as _cfg, shutil, time, chromadb as _chromadb
     vector_db_path = Path(VECTOR_DB_PATH)
-    model_marker = vector_db_path / ".embed_model"
+    model_marker   = vector_db_path / ".embed_model"
+    pending_file   = vector_db_path / ".pending_delete"
+    current_embed  = _cfg.EMBED_MODEL
 
-    current_model = EMBED_MODEL
+    # ── 处理上次遗留的待删集合 ──────────────────────────────────
+    if pending_file.exists():
+        try:
+            pending_cols = [c.strip() for c in pending_file.read_text(encoding="utf-8").splitlines() if c.strip()]
+            if pending_cols:
+                print(f"[Startup] 发现上次未能删除的集合: {pending_cols}，正在重试...")
+                try:
+                    _tmp = _chromadb.PersistentClient(path=str(vector_db_path))
+                    still_failed = []
+                    for col_name in pending_cols:
+                        try:
+                            _tmp.delete_collection(col_name)
+                            print(f"[Startup] ✅ 已删除残留集合: {col_name}")
+                        except Exception as e:
+                            still_failed.append(col_name)
+                            print(f"[Startup] ❌ 仍无法删除集合 {col_name}: {e}")
+                    del _tmp
+                    time.sleep(0.2)
+                    if still_failed:
+                        pending_file.write_text("\n".join(still_failed), encoding="utf-8")
+                        print(f"[Startup] ⚠️ 仍有残留集合，将在下次启动继续重试: {still_failed}")
+                    else:
+                        pending_file.unlink()
+                        print(f"[Startup] ✅ 所有残留集合已清理完毕")
+                        # 尝试再次删除整个目录（此时文件锁应已释放）
+                        time.sleep(0.5)
+                        try:
+                            shutil.rmtree(str(vector_db_path), ignore_errors=False)
+                            print(f"[Startup] ✅ 已删除残留的 vector_db 目录")
+                            # 重建目录和标记
+                            vector_db_path.mkdir(parents=True, exist_ok=True)
+                            model_marker.write_text(current_embed, encoding="utf-8")
+                            # 触发重索引
+                            t = threading.Thread(target=_reindex_all_documents, daemon=True)
+                            t.start()
+                            return
+                        except Exception as re:
+                            print(f"[Startup] rmtree 仍失败，仅清理了集合元数据: {re}")
+                            vector_db_path.mkdir(parents=True, exist_ok=True)
+                            model_marker.write_text(current_embed, encoding="utf-8")
+                            t = threading.Thread(target=_reindex_all_documents, daemon=True)
+                            t.start()
+                            return
+                except Exception as e:
+                    print(f"[Startup] 处理待删集合失败: {e}")
+        except Exception as e:
+            print(f"[Startup] 读取 .pending_delete 失败: {e}")
 
-    # 已知模型的向量维度映射（所有检查都使用这个字典）
     KNOWN_DIMS = {
-        "nomic-embed-text":       768,
-        "mxbai-embed-large":      1024,
-        "bge-m3:latest":         1024,
-        "mge-m3:latest":         1024,
-        "qwen3-embedding:0.6b":  1024,
-        "qwen3-embedding:1.7b":  2048,
-        "qwen3-embedding:4b":    2560,
-        "qwen3-embedding:8b":    4096,
+        "nomic-embed-text":      768,
+        "mxbai-embed-large":    1024,
+        "bge-m3:latest":        1024,
+        "mge-m3:latest":        1024,
+        "qwen3-embedding:0.6b": 1024,
+        "qwen3-embedding:1.7b": 2048,
+        "qwen3-embedding:4b":   2560,
+        "qwen3-embedding:8b":   4096,
     }
 
-    # ── 检查 1：模型名称是否一致 ──────────────────────────────
-    last_model = ""
+    # ── 检查 1：模型名称 ────────────────────────────────────────
+    last_embed = ""
     if model_marker.exists():
         try:
-            last_model = model_marker.read_text(encoding="utf-8").strip()
+            last_embed = model_marker.read_text(encoding="utf-8").strip()
         except Exception:
             pass
 
-    model_name_changed = last_model and last_model != current_model
-
-    # ── 检查 2：ChromaDB 维度健全性 ───────────────────────────
-    # 即使模型名称一致，也要检查集合是否有旧维度数据残留
-    # 直接读 SQLite 的 segments 表，获取集合实际存储的向量维度
-    # （Windows 文件锁可能导致 rmtree 不完整，SQLite 里存有旧维度）
-    dimension_mismatch = False
-    stored_dim = None
-    expected_dim = KNOWN_DIMS.get(current_model)
-
-    sqlite_path = vector_db_path / "chroma.sqlite3"
-    if sqlite_path.exists():
-        try:
-            import sqlite3 as _sqlite3
-            conn = _sqlite3.connect(str(sqlite_path))
-            c = conn.cursor()
-            # segment_metadata 表记录了各集合的向量维度
-            c.execute("""
-                SELECT sm.int_value
-                FROM segment_metadata sm
-                WHERE sm.key = 'hnsw:dimensions'
-                LIMIT 1
-            """)
-            row = c.fetchone()
-            conn.close()
-
-            if row and row[0]:
-                stored_dim = int(row[0])
-                if expected_dim and stored_dim != expected_dim:
-                    dimension_mismatch = True
-        except Exception as e:
-            print(f"[Startup] 维度检查失败（非致命）: {e}")
-
-    # ── 决策：是否需要清空向量库 ─────────────────────────────
-    need_purge = False
+    need_purge   = False
     purge_reason = ""
 
-    if model_name_changed:
-        need_purge = True
-        purge_reason = f"Embedding 模型变更: {last_model} → {current_model}"
-    elif dimension_mismatch:
-        need_purge = True
-        purge_reason = f"向量维度不匹配: 存储={stored_dim}, 期望={expected_dim} ({current_model})"
+    if last_embed and last_embed != current_embed:
+        need_purge   = True
+        purge_reason = f"Embedding 模型变更: {last_embed} → {current_embed}"
+
+    # ── 检查 2：ChromaDB 维度健全性 ───────────────────────────
+    if not need_purge:
+        sqlite_path = vector_db_path / "chroma.sqlite3"
+        if sqlite_path.exists():
+            try:
+                import sqlite3 as _sqlite3
+                conn = _sqlite3.connect(str(sqlite_path))
+                c    = conn.cursor()
+                c.execute("SELECT int_value FROM segment_metadata WHERE key='hnsw:dimensions' LIMIT 1")
+                row  = c.fetchone()
+                conn.close()
+                if row and row[0]:
+                    stored_dim   = int(row[0])
+                    expected_dim = KNOWN_DIMS.get(current_embed)
+                    if expected_dim and stored_dim != expected_dim:
+                        need_purge   = True
+                        purge_reason = f"向量维度不匹配: 存储={stored_dim}, 期望={expected_dim} ({current_embed})"
+                    elif expected_dim:
+                        print(f"[Startup] ✅ 向量维度一致: {stored_dim} ({current_embed})")
+                    else:
+                        print(f"[Startup] ℹ️ 未知模型 {current_embed}，跳过维度检查，存储维度={stored_dim}")
+            except Exception as e:
+                print(f"[Startup] 维度检查失败（非致命）: {e}")
 
     if need_purge:
         print(f"[Startup] ⚠️ {purge_reason}")
         print(f"[Startup] 清空向量库并重新索引...")
         _purge_vector_db()
-        # 启动后台重索引
-        t = threading.Thread(target=_reindex_all_documents, daemon=True)
+        # 重建完成后写入新的 .embed_model（在重索引线程完成后写）
+        def _reindex_and_mark():
+            _reindex_all_documents()
+            try:
+                vector_db_path.mkdir(parents=True, exist_ok=True)
+                model_marker.write_text(current_embed, encoding="utf-8")
+                print(f"[Startup] ✅ .embed_model 已更新: {current_embed}")
+            except Exception as e:
+                print(f"[Startup] ⚠️ 写入 .embed_model 失败: {e}")
+        t = threading.Thread(target=_reindex_and_mark, daemon=True)
         t.start()
         return
 
-    # 一切正常
-    if expected_dim and stored_dim:
-        print(f"[Startup] ✅ 向量维度一致: {stored_dim} ({current_model})")
-    elif expected_dim:
-        print(f"[Startup] ℹ️ 向量库为空，当前模型: {current_model} (维度={expected_dim})")
-    else:
-        print(f"[Startup] ℹ️ 未知模型 {current_model}，跳过维度检查")
-        if stored_dim:
-            print(f"[Startup] ℹ️ 当前存储的向量维度: {stored_dim}")
-
-    # 确保标记文件与当前配置同步（首次启动时写入）
+    # 一切正常，确保标记文件与当前配置同步
     try:
         vector_db_path.mkdir(parents=True, exist_ok=True)
-        model_marker.write_text(current_model, encoding="utf-8")
+        model_marker.write_text(current_embed, encoding="utf-8")
     except Exception as e:
         print(f"[Startup] 无法写入模型标记文件: {e}")
 
@@ -828,14 +918,15 @@ def _reindex_all_documents():
     """
     重新索引所有知识库中的 .md 文档。
 
-    用于 embedding 模型变更后自动重建向量库。
-    遍历所有知识库，分别清空并重新索引。
     执行流程：
       1. 等待 embed 模型就绪
-      2. 清空 RAG 引擎缓存（确保使用全新的 ChromaDB 客户端）
-      3. 遍历所有知识库
-      4. 每个知识库：扫描文档 → 读取 → 分块 → 向量化 → 写入 ChromaDB
-      5. 更新各知识库的 .indexed 标记文件
+      2. 清空 RAG 引擎缓存
+      3. 遍历所有知识库的所有 .md 文件
+      4. 对每个文档：
+         - 读取 SQLite 中的历史切分记录（embed_model/chunk_method/chunk_size/chunk_overlap）
+         - 若记录存在且与当前配置一致，跳过（无需重切）
+         - 否则用当前配置重新切分并入库
+      5. 更新 .indexed 标记和 SQLite 切分记录
     """
     global _reindex_status
     _reindex_status = {
@@ -852,6 +943,8 @@ def _reindex_all_documents():
 
     # 等待 embedding 模型加载完成（最多等待 60 秒）
     import time
+    import config as _cfg
+
     wait_time = 0
     _reindex_status["status"] = "等待模型加载..."
     while wait_time < 60:
@@ -875,16 +968,21 @@ def _reindex_all_documents():
         return
 
     print("[Reindex] Embedding 模型已就绪，准备索引文档")
-    
-    # 关键：再次清空 RAG 引擎缓存，确保使用全新的 ChromaDB 客户端
-    # 这样可以避免任何残留的集合元数据（尤其是维度信息）
+
+    # 再次清空 RAG 引擎缓存，确保使用全新的 ChromaDB 客户端
     _invalidate_rag_engines()
-    time.sleep(1)  # 等待垃圾回收释放旧客户端
+    time.sleep(1)
     print("[Reindex] 已清空 RAG 引擎缓存，确保使用新模型配置")
+
+    # 当前配置
+    cur_embed  = _cfg.EMBED_MODEL
+    cur_method = getattr(_cfg, "CHUNK_METHOD",  "recursive")
+    cur_size   = _cfg.CHUNK_SIZE
+    cur_overlap= _cfg.CHUNK_OVERLAP
 
     # 收集所有知识库的所有 .md 文件
     kbs = list_kbs()
-    all_files = []  # [(kb_id, Path)]
+    all_files: list[tuple] = []  # [(kb_id, Path)]
     for kb in kbs:
         kb_id = kb["kb_id"]
         kb_dir = get_kb_upload_dir(kb_id)
@@ -904,39 +1002,81 @@ def _reindex_all_documents():
 
     print(f"[Reindex] 找到 {total} 个文档（跨 {len(kbs)} 个知识库）")
 
-    # 按知识库分组记录已索引文件
     kb_indexed: dict = {kb["kb_id"]: set() for kb in kbs}
-    errors = []
+    errors  = []
+    skipped = 0
 
     for kb_id, f in all_files:
         _reindex_status["current_file"] = f.name
+        _reindex_status["current"] += 1
+
+        # ── 参考 SQLite 记录，决定是否需要重切 ──────────────────
+        rec = get_doc_chunk_record(kb_id, f.name)
+        if rec and rec["embed_model"] == cur_embed:
+            # embed_model 一致，再看 chunk 参数是否与记录一致
+            # （chunk 参数以文档自己的历史记录为准，不与全局 cur_* 比较）
+            # 只要 embed_model 没变，且该文档已有完整记录，就跳过重切
+            kb_indexed[kb_id].add(f.name)
+            skipped += 1
+            _reindex_status["success"] += 1
+            print(f"[Reindex] [{_reindex_status['current']}/{total}] ⏭️  {f.name} "
+                  f"embed未变({cur_embed[:30]})，跳过")
+            continue
+
+        hint = f"embed={rec['embed_model'][:20]}→{cur_embed[:20]}, method={rec['chunk_method']}→{cur_method}" if rec else "首次索引"
+        print(f"[Reindex] [{_reindex_status['current']}/{total}] 🔄 {f.name} ({hint})")
+
+        # ── 确定本次切分参数：优先用该文档自己的历史参数，若无记录则用全局配置 ──
+        # 注意：embed_model 变更时必须用新模型，但 chunk 参数沿用文档自己的历史值
+        if rec:
+            doc_method  = rec["chunk_method"]
+            doc_size    = rec["chunk_size"]
+            doc_overlap = rec["chunk_overlap"]
+        else:
+            doc_method  = cur_method
+            doc_size    = cur_size
+            doc_overlap = cur_overlap
 
         try:
             texts = parse_document(str(f))
             if not texts:
                 errors.append(f"{f.name}: 文档为空")
                 _reindex_status["failed"] += 1
-                _reindex_status["current"] += 1
                 continue
 
-            chunks = chunk_texts(texts, is_markdown=True)
+            chunks = chunk_texts(
+                texts,
+                is_markdown=True,
+                method=doc_method,
+                chunk_size=doc_size,
+                chunk_overlap=doc_overlap,
+            )
             if not chunks:
                 errors.append(f"{f.name}: 分块失败")
                 _reindex_status["failed"] += 1
-                _reindex_status["current"] += 1
                 continue
 
             engine = get_rag_engine(kb_id)
             engine.ingest_document(f.name, chunks)
+
+            # 更新 SQLite 切分记录（embed_model 用新模型，chunk 参数用实际使用的值）
+            save_doc_chunk_record(
+                kb_id=kb_id, filename=f.name,
+                embed_model=cur_embed,
+                chunk_method=doc_method,
+                chunk_size=doc_size,
+                chunk_overlap=doc_overlap,
+                chunk_count=len(chunks),
+            )
+
             kb_indexed[kb_id].add(f.name)
             _reindex_status["success"] += 1
-            _reindex_status["current"] += 1
-            print(f"[Reindex] [{_reindex_status['current']}/{total}] ✅ {f.name} (kb={kb_id}, {len(chunks)} 块)")
+            print(f"[Reindex] [{_reindex_status['current']}/{total}] ✅ {f.name} "
+                  f"(method={doc_method}, size={doc_size}, {len(chunks)} 块)")
 
         except Exception as e:
             errors.append(f"{f.name}: {str(e)}")
             _reindex_status["failed"] += 1
-            _reindex_status["current"] += 1
             print(f"[Reindex] [{_reindex_status['current']}/{total}] ❌ {f.name}: {e}")
 
     # 保存各知识库的索引标记
@@ -948,6 +1088,13 @@ def _reindex_all_documents():
 
     print("=" * 60)
     print(f"[Reindex] 重新索引完成:")
+    print(f"  ✅ 成功/跳过: {_reindex_status['success']} (其中跳过 {skipped} 个配置未变的文档)")
+    print(f"  ❌ 失败: {_reindex_status['failed']}")
+    if errors:
+        print(f"  错误详情:")
+        for err in errors:
+            print(f"    - {err}")
+    print("=" * 60)
     print(f"  ✅ 成功: {_reindex_status['success']}")
     print(f"  ❌ 失败: {_reindex_status['failed']}")
     if errors:
@@ -1020,6 +1167,7 @@ async def chat(req: ChatRequest):
     # 跨多个知识库并行检索，合并结果
     import config as _cfg
     all_docs = []
+    search_errors = []
     for kb_id in kb_ids:
         try:
             engine = get_rag_engine(kb_id)
@@ -1028,14 +1176,21 @@ async def chat(req: ChatRequest):
             print(f"[Chat] 知识库 {kb_id}: 集合条目={col_count}, 检索到={len(docs)} 条, TOP_K={_cfg.TOP_K}")
             all_docs.extend(docs)
         except Exception as e:
-            print(f"[Chat] 检索知识库 {kb_id} 时出错: {e}")
-            import traceback
-            traceback.print_exc()
-            continue
+            err_msg = str(e)
+            print(f"[Chat] 检索知识库 {kb_id} 时出错: {err_msg}")
+            search_errors.append(err_msg)
 
     print(f"[Chat] 合并后总文档数: {len(all_docs)}")
 
-    if not all_docs:
+    if not all_docs and search_errors:
+        # 检索全部失败，返回具体错误原因
+        first_err = search_errors[0]
+        if "dimension" in first_err.lower() or "embedding" in first_err.lower():
+            err_answer = "⚠️ 向量维度不匹配：当前嵌入模型与知识库索引时使用的模型不一致，请在设置页面重新上传文档或切换回原嵌入模型。"
+        else:
+            err_answer = f"检索失败: {first_err}"
+        result = {"answer": err_answer, "sources": [], "has_knowledge": False}
+    elif not all_docs:
         result = {
             "answer": "抱歉，知识库中暂无相关内容。请先上传文档到知识库。",
             "sources": [],
@@ -1091,16 +1246,34 @@ async def chat_stream(req: ChatRequest):
     # 跨知识库检索（同非流式接口）
     import config as _cfg
     all_docs = []
+    search_errors = []
     for kb_id in kb_ids:
         try:
             engine = get_rag_engine(kb_id)
             docs = engine.vector_store.search(req.question, collection_name=kb_id, top_k=_cfg.TOP_K)
             all_docs.extend(docs)
         except Exception as e:
-            print(f"[ChatStream] 检索知识库 {kb_id} 时出错: {e}")
+            err_msg = str(e)
+            print(f"[ChatStream] 检索知识库 {kb_id} 时出错: {err_msg}")
+            search_errors.append(err_msg)
 
     session_id = req.session_id or str(uuid.uuid4())
     main_engine = get_rag_engine(kb_ids[0])
+
+    # 检索全部失败且有错误信息，立即返回错误
+    if not all_docs and search_errors:
+        first_err = search_errors[0]
+        if "dimension" in first_err.lower() or "embedding" in first_err.lower():
+            err_hint = "⚠️ 向量维度不匹配：当前嵌入模型与知识库索引时使用的模型不一致，请在设置页面重新上传文档或切换回原嵌入模型。"
+        else:
+            err_hint = f"检索失败: {first_err}"
+
+        async def _err_stream():
+            yield f"data: {_json.dumps({'error': err_hint}, ensure_ascii=False)}\n\n"
+            done_msg = {"done": True, "sources": [], "has_knowledge": False, "session_id": session_id}
+            yield f"data: {_json.dumps(done_msg, ensure_ascii=False)}\n\n"
+
+        return _SR(_err_stream(), media_type="text/event-stream")
 
     async def _generate():
         import asyncio
@@ -1166,22 +1339,15 @@ async def chat_stream(req: ChatRequest):
 @app.get("/api/models")
 async def get_model_info():
     """
-    查询当前模型配置（从 config.py 读取）。
-
-    响应体示例：
-      {
-        "chat_model": "qwen3.6:27b",
-        "embed_model": "qwen3-embedding:4b",
-        "rerank_model": "MedAIBase/Qwen3-VL-Reranker:2b",
-        "ollama_url": "http://localhost:11434"
-      }
+    查询当前模型配置（从 config 模块动态读取，保证反映运行时最新值）。
     """
+    import config as _cfg
     return ModelInfo(
-        chat_model=CHAT_MODEL,
-        embed_model=EMBED_MODEL,
-        rerank_model=RERANK_MODEL,
-        ocr_model=OCR_MODEL,
-        ollama_url=OLLAMA_BASE_URL,
+        chat_model=_cfg.CHAT_MODEL,
+        embed_model=_cfg.EMBED_MODEL,
+        rerank_model=_cfg.RERANK_MODEL,
+        ocr_model=_cfg.OCR_MODEL,
+        ollama_url=_cfg.OLLAMA_BASE_URL,
     )
 
 
@@ -1348,56 +1514,26 @@ async def save_config(req: ModelConfigRequest):
     # 如果 embedding 模型变更，清空所有知识库的向量库并准备重建
     if embed_changed:
         try:
-            # 步骤 1：先销毁所有 RAG 引擎缓存（释放 ChromaDB 客户端连接）
+            # 先销毁所有 RAG 引擎缓存（释放 ChromaDB 客户端连接）
             _invalidate_rag_engines()
             print("[Config] 已销毁所有 RAG 引擎缓存")
-            
-            # 步骤 2：显式删除所有 ChromaDB 集合（避免维度冲突）
-            import shutil
-            import time
-            import chromadb
-            vector_db_path = Path(VECTOR_DB_PATH)
-            
-            if vector_db_path.exists():
-                try:
-                    # 创建临时 ChromaDB 客户端来删除所有集合
-                    temp_client = chromadb.PersistentClient(path=str(vector_db_path))
-                    collections = temp_client.list_collections()
-                    for col in collections:
-                        try:
-                            temp_client.delete_collection(col.name)
-                            print(f"[Config] 已删除集合: {col.name}")
-                        except Exception as ce:
-                            print(f"[Config] 删除集合 {col.name} 失败: {ce}")
-                    # 确保客户端释放所有资源
-                    del temp_client
-                    time.sleep(0.5)
-                except Exception as ce:
-                    print(f"[Config] 列举/删除集合失败: {ce}")
-                
-                # 步骤 3：删除整个 vector_db 目录
-                # 确保所有文件句柄已释放（Windows 文件锁问题）
-                time.sleep(0.5)
-                shutil.rmtree(str(vector_db_path))
-                print(f"[Config] 已删除整个 vector_db 目录")
-            
-            # 步骤 4：清空所有知识库的索引标记
-            kbs = list_kbs()
-            for kb in kbs:
-                _save_indexed(set(), kb["kb_id"])
-            vectors_cleared = True
-            print(f"[Config] Embedding 模型已变更，已清空 {len(kbs)} 个知识库的向量索引标记")
 
-            # 步骤 5：重建目录并更新模型标记
-            vector_db_path.mkdir(parents=True, exist_ok=True)
-            model_marker = vector_db_path / ".embed_model"
-            model_marker.write_text(req.embed_model, encoding="utf-8")
-            print(f"[Config] 已更新模型标记: {req.embed_model}")
-            
+            import time
+            time.sleep(0.5)  # 等待连接释放
+
+            # 更新 config 里的 EMBED_MODEL，让 _purge_vector_db 写入正确的标记
+            _cfg.EMBED_MODEL = req.embed_model
+
+            # 统一调用 _purge_vector_db，包含 .pending_delete 记录逻辑
+            _purge_vector_db()
+            vectors_cleared = True
+
         except Exception as e:
-            print(f"[Config] 清空向量库失败: {e}")
+            print(f"[Config] 清空向量库过程出错: {e}")
             import traceback
             traceback.print_exc()
+            # 兜底：不写 .embed_model，确保重启时强制重建
+            # (vector_db_path / ".embed_model").write_text(req.embed_model)  # 注释掉
     
     env_path = Path(os.path.dirname(__file__)) / ".env"
     # 更新 .env 文件
@@ -1458,30 +1594,29 @@ async def save_config(req: ModelConfigRequest):
 
 
 @app.post("/api/upload")
-async def upload_doc(file: UploadFile = File(...), kb_id: str = "knowledge_base"):
+async def upload_doc(
+    file: UploadFile = File(...),
+    kb_id: str = "knowledge_base",
+    chunk_method: str = None,   # 上传时指定切分方式，None 则使用全局配置
+    chunk_size: int = None,     # 上传时指定分块大小，None 则使用全局配置
+    chunk_overlap: int = None,  # 上传时指定重叠大小，None 则使用全局配置
+):
     """
     上传文档接口：接收前端上传的单个文件，转换为 Markdown 并索引到指定知识库的向量库。
 
     处理流程：
       1. 调用 document_processor.upload_file 保存原文件到对应知识库的 uploads 目录
       2. 若文件非 .md，调用 convert_to_md（markitdown 转换）
-      3. 读取 .md 文件内容，分块（chunk_texts，启用 Markdown 语法感知）
+      3. 读取 .md 文件内容，按上传时指定的参数分块（优先于全局配置）
       4. 调用 RagEngine.ingest_document 写入向量库
-      5. 更新知识库的 .indexed 标记，记录已入库
-      6. 删除原始非 md 文件（保留转换后的 .md 文件）
-
-    请求：
-      multipart/form-data, file 字段
-      Form 参数: kb_id (可选，默认 "knowledge_base")
-
-    响应：
-      {"status": "success", "message": "文档 xxx.pdf 已上传并索引"}
-
-    错误：
-      - 文件格式不支持 → 400
-      - 空文档/分块失败 → 400
-      - Markitdown 转换失败 → 500
+      5. 更新知识库的 .indexed 标记和 SQLite 切分记录
     """
+    import config as _cfg
+
+    # 解析切分参数：优先使用上传时传入的值，否则使用全局配置
+    _chunk_method  = (chunk_method  or getattr(_cfg, "CHUNK_METHOD",  "recursive")).strip().lower()
+    _chunk_size    = chunk_size    if chunk_size    is not None else _cfg.CHUNK_SIZE
+    _chunk_overlap = chunk_overlap if chunk_overlap is not None else _cfg.CHUNK_OVERLAP
     # 验证知识库是否存在
     kb = get_kb(kb_id)
     if not kb:
@@ -1510,17 +1645,39 @@ async def upload_doc(file: UploadFile = File(...), kb_id: str = "knowledge_base"
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Markitdown 转换失败: {e}")
 
-    # 读取 md 内容并分块
+    # 读取 md 内容并直接传参分块（不覆盖全局 config，线程安全）
     texts = parse_document(str(md_path))
     if not texts:
         raise HTTPException(status_code=400, detail="文档为空或无法解析")
-    chunks = chunk_texts(texts, is_markdown=True)
+
+    chunks = chunk_texts(
+        texts,
+        is_markdown=True,
+        method=_chunk_method,
+        chunk_size=_chunk_size,
+        chunk_overlap=_chunk_overlap,
+    )
     if not chunks:
         raise HTTPException(status_code=400, detail="文档分块失败")
 
     # 入库到指定知识库
     engine = get_rag_engine(kb_id)
-    engine.ingest_document(md_path.name, chunks)
+    try:
+        engine.ingest_document(md_path.name, chunks)
+    except Exception as e:
+        import traceback
+        print(f"[Upload] ingest_document 失败: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"向量化失败: {str(e)}")
+
+    # 记录本次实际使用的切分配置到 SQLite
+    save_doc_chunk_record(
+        kb_id=kb_id, filename=md_path.name,
+        embed_model=_cfg.EMBED_MODEL,
+        chunk_method=_chunk_method,
+        chunk_size=_chunk_size, chunk_overlap=_chunk_overlap,
+        chunk_count=len(chunks),
+    )
 
     # 更新知识库的索引标记
     indexed = _load_indexed(kb_id)
@@ -1558,6 +1715,56 @@ async def get_documents(kb_id: str = "knowledge_base"):
     return {"documents": docs_list}
 
 
+@app.get("/api/documents/chunk-records")
+async def get_chunk_records(kb_id: str = "knowledge_base"):
+    """
+    查询指定知识库所有文档的切分记录。
+
+    返回每个文档的：embed_model、chunk_method、chunk_size、chunk_overlap、chunk_count、indexed_at
+    前端可用于展示文档索引详情，或提示哪些文档需要重新索引。
+    """
+    import config as _cfg
+    records = list_doc_chunk_records(kb_id)
+    cur_embed  = _cfg.EMBED_MODEL
+    cur_method = getattr(_cfg, "CHUNK_METHOD", "recursive")
+    cur_size   = _cfg.CHUNK_SIZE
+    cur_overlap= _cfg.CHUNK_OVERLAP
+
+    # 标记每条记录是否与当前配置一致
+    for r in records:
+        r["up_to_date"] = (
+            r["embed_model"]   == cur_embed  and
+            r["chunk_method"]  == cur_method and
+            r["chunk_size"]    == cur_size   and
+            r["chunk_overlap"] == cur_overlap
+        )
+    return {"records": records, "total": len(records)}
+
+
+@app.get("/api/document/download")
+async def download_document(filename: str, kb_id: str = "knowledge_base"):
+    """
+    下载指定知识库中的原始文档文件。
+    filename 为文档名（如 report.pdf），从知识库上传目录返回文件。
+    """
+    from fastapi.responses import FileResponse as _FR
+    kb = get_kb(kb_id)
+    if not kb:
+        raise HTTPException(status_code=404, detail=f"知识库 {kb_id} 不存在")
+
+    kb_dir = get_kb_upload_dir(kb_id)
+    file_path = kb_dir / filename
+
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail=f"文件不存在: {filename}")
+
+    return _FR(
+        path=str(file_path),
+        filename=filename,
+        media_type="application/octet-stream",
+    )
+
+
 @app.get("/api/config/rag-params")
 async def get_rag_params():
     """
@@ -1570,6 +1777,7 @@ async def get_rag_params():
         "chunk_size": _cfg.CHUNK_SIZE,
         "chunk_overlap": _cfg.CHUNK_OVERLAP,
         "num_ctx": 4096,  # 从 rag_engine 读取，这里用默认值
+        "chunk_method": getattr(_cfg, "CHUNK_METHOD", "recursive"),
     }
 
 
@@ -1579,6 +1787,7 @@ class RagParamsRequest(BaseModel):
     chunk_size: int
     chunk_overlap: int
     num_ctx: int
+    chunk_method: str = "recursive"
 
 
 @app.post("/api/config/rag-params")
@@ -1597,6 +1806,8 @@ async def save_rag_params(req: RagParamsRequest):
         raise HTTPException(status_code=400, detail="CHUNK_OVERLAP 必须小于 CHUNK_SIZE")
     if req.num_ctx < 512 or req.num_ctx > 32768:
         raise HTTPException(status_code=400, detail="num_ctx 范围: 512~32768")
+    if req.chunk_method not in ("fixed", "recursive", "markdown", "semantic"):
+        raise HTTPException(status_code=400, detail="chunk_method 必须为 fixed/recursive/markdown/semantic")
 
     # 写入 .env
     env_path = Path(__file__).parent / ".env"
@@ -1605,6 +1816,7 @@ async def save_rag_params(req: RagParamsRequest):
         "RERANK_TOP_K": str(req.rerank_top_k),
         "CHUNK_SIZE": str(req.chunk_size),
         "CHUNK_OVERLAP": str(req.chunk_overlap),
+        "CHUNK_METHOD": req.chunk_method,
     })
 
     # 运行时立即生效
@@ -1613,6 +1825,7 @@ async def save_rag_params(req: RagParamsRequest):
     _cfg.RERANK_TOP_K = req.rerank_top_k
     _cfg.CHUNK_SIZE = req.chunk_size
     _cfg.CHUNK_OVERLAP = req.chunk_overlap
+    _cfg.CHUNK_METHOD = req.chunk_method
 
     # num_ctx 需要重建 RAG 引擎才能生效
     chunk_size_changed = req.chunk_size != _cfg.CHUNK_SIZE
@@ -1624,9 +1837,15 @@ async def save_rag_params(req: RagParamsRequest):
                     engine.llm.num_ctx = req.num_ctx
 
     print(f"[RagParams] 参数已更新: TOP_K={req.top_k}, RERANK_TOP_K={req.rerank_top_k}, "
-          f"CHUNK_SIZE={req.chunk_size}, CHUNK_OVERLAP={req.chunk_overlap}, num_ctx={req.num_ctx}")
+          f"CHUNK_SIZE={req.chunk_size}, CHUNK_OVERLAP={req.chunk_overlap}, "
+          f"num_ctx={req.num_ctx}, CHUNK_METHOD={req.chunk_method}")
 
-    return {"status": "success", "message": "参数已保存并生效"}
+    return {
+        "status": "success",
+        "message": "参数已保存并生效",
+        "chunk_method_changed": False,
+        "chunk_method_changed_hint": f"切分方式已改为「{req.chunk_method}」，新上传文档将使用此方式",
+    }
 
 
 @app.get("/api/stats")
@@ -1774,7 +1993,10 @@ async def delete_doc(filename: str, kb_id: str = "knowledge_base"):
         indexed = _load_indexed(kb_id)
         indexed.discard(md_filename)
         _save_indexed(indexed, kb_id)
-        
+
+        # 清除 SQLite 中的切分记录
+        delete_doc_chunk_record(kb_id, md_filename)
+
         return {
             "status": "success",
             "message": f"文档 {filename} 已从知识库「{kb['name']}」删除",
@@ -2006,4 +2228,5 @@ async def delete_knowledge_base(kb_id: str):
 if __name__ == "__main__":
     import uvicorn
     # 开发模式启动（reload=False 避免二次执行 lifespan）
-    uvicorn.run("app:app", host=HOST, port=PORT, reload=False)
+    # access_log=False 关闭每条请求的访问日志（GET /api/stats 200 OK 等）
+    uvicorn.run("app:app", host=HOST, port=PORT, reload=False, access_log=False)

@@ -390,7 +390,47 @@
 
                 <div class="params-group">
                     <h4 class="params-group-title">📄 分块参数 <span style="color:var(--warning);font-size:0.78rem;font-weight:400;">（修改后需重新上传文档）</span></h4>
+
+                    <!-- 切分方式 -->
                     <div class="settings-field">
+                        <label>切分方式 <span class="params-hint">决定文档如何分割成检索块</span></label>
+                        <div class="chunk-method-selector">
+                            <label class="chunk-method-option">
+                                <input type="radio" name="chunkMethod" value="fixed">
+                                <div class="chunk-method-card">
+                                    <span class="chunk-method-icon">✂️</span>
+                                    <span class="chunk-method-name">固定切分</span>
+                                    <span class="chunk-method-desc">严格按 CHUNK_SIZE 字符数切，块大小最均匀。<br>适合：格式混乱的纯文本、日志、数据导出</span>
+                                </div>
+                            </label>
+                            <label class="chunk-method-option">
+                                <input type="radio" name="chunkMethod" value="recursive" checked>
+                                <div class="chunk-method-card">
+                                    <span class="chunk-method-icon">🔀</span>
+                                    <span class="chunk-method-name">递归切分</span>
+                                    <span class="chunk-method-desc">优先按标点/空行逐级细分，兼顾语义和块大小均匀性。<br>适合：通用文档，不确定时首选</span>
+                                </div>
+                            </label>
+                            <label class="chunk-method-option">
+                                <input type="radio" name="chunkMethod" value="markdown">
+                                <div class="chunk-method-card">
+                                    <span class="chunk-method-icon">📑</span>
+                                    <span class="chunk-method-name">标题树切分</span>
+                                    <span class="chunk-method-desc">按 #/##/### 标题层级切，块内含章节路径上下文。<br>适合：结构化文档（保险条款、产品手册、API 文档）</span>
+                                </div>
+                            </label>
+                            <label class="chunk-method-option">
+                                <input type="radio" name="chunkMethod" value="semantic">
+                                <div class="chunk-method-card">
+                                    <span class="chunk-method-icon">🧠</span>
+                                    <span class="chunk-method-name">语义切分</span>
+                                    <span class="chunk-method-desc">用 Embedding 相似度判断语义边界，块大小不固定（较慢）。<br>适合：叙事型文档（新闻、报告、书籍）</span>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="settings-field" id="chunkSizeField">
                         <label>
                             分块大小 (CHUNK_SIZE)
                             <span class="params-hint">每个文档块的最大 token 数</span>
@@ -400,7 +440,7 @@
                             <input type="number" id="chunkSizeInput" min="100" max="1000" step="50" value="500" class="params-number">
                         </div>
                     </div>
-                    <div class="settings-field">
+                    <div class="settings-field" id="chunkOverlapField">
                         <label>
                             分块重叠 (CHUNK_OVERLAP)
                             <span class="params-hint">相邻分块的重叠 token 数，防止语义断裂</span>
@@ -489,7 +529,7 @@
     </div>
 
     <!-- 引入前端交互逻辑脚本，v=2 用于强制浏览器刷新缓存 -->
-    <script src="/static/app.js?v=8"></script>
+    <script src="/static/app.js?v=9"></script>
 
     <!-- =====================================================
          Embedding 模型变更警告 Modal：更换嵌入模型时弹出

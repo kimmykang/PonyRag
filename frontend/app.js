@@ -470,6 +470,16 @@ async function openSettingsModal() {
         setParamValue('chunkSize', paramsRes.chunk_size || 500);
         setParamValue('chunkOverlap', paramsRes.chunk_overlap || 50);
         setParamValue('numCtx', paramsRes.num_ctx || 4096);
+        // 切分方式：选中对应 radio，并初始化分块参数显隐
+        const method = paramsRes.chunk_method || 'recursive';
+        const radioEl = document.querySelector(`input[name="chunkMethod"][value="${method}"]`);
+        if (radioEl) radioEl.checked = true;
+        _updateChunkParamVisibility(method);
+
+        // 监听切分方式切换，动态显隐分块参数
+        document.querySelectorAll('input[name="chunkMethod"]').forEach(r => {
+            r.addEventListener('change', () => _updateChunkParamVisibility(r.value));
+        });
     }
 
     // Tab 切换逻辑
@@ -523,6 +533,8 @@ async function openSettingsModal() {
         const chunkSize = parseInt(document.getElementById('chunkSizeInput').value);
         const chunkOverlap = parseInt(document.getElementById('chunkOverlapInput').value);
         const numCtx = parseInt(document.getElementById('numCtxInput').value);
+        const chunkMethodEl = document.querySelector('input[name="chunkMethod"]:checked');
+        const chunkMethod = chunkMethodEl ? chunkMethodEl.value : 'recursive';
 
         if (rerankTopK > topK) {
             paramsHint.textContent = '精排数量不能超过召回数量';
@@ -545,7 +557,8 @@ async function openSettingsModal() {
                     rerank_top_k: rerankTopK,
                     chunk_size: chunkSize,
                     chunk_overlap: chunkOverlap,
-                    num_ctx: numCtx
+                    num_ctx: numCtx,
+                    chunk_method: chunkMethod,
                 }),
             });
             const data = await res.json();
@@ -739,6 +752,9 @@ async function saveModelConfig(chatModel, embedModel, rerankModel, ocrModel, hin
         const data = await res.json();
         if (res.ok && data.status === 'success') {
             closeModalCallback();
+
+            // OCR 模型状态立即刷新（不需要轮询，直接读配置）
+            updateOcrModelStatus();
 
             // 只有有模型变更时才启动状态轮询
             if (data.changed_keys && data.changed_keys.length > 0) {
@@ -1248,17 +1264,29 @@ async function handleChatSubmit(e) {
                 } else if (event.done) {
                     sources = event.sources || [];
                     sessionId = event.session_id || sessionId;
-                    if (contentDiv) {
+                    // 只有有内容时才覆盖（避免 error 后的 done 清空错误消息）
+                    if (contentDiv && fullAnswer) {
                         contentDiv.innerHTML = renderMarkdown(fullAnswer);
                         appendSources(contentDiv, sources);
+                    } else if (!contentDiv) {
+                        // done 但没有任何 token（暂无内容场景）
+                        typingEl.remove();
+                        const answer = event.answer || '暂无相关内容';
+                        addMessage('assistant', answer, sources);
+                        fullAnswer = answer;
                     }
                     scrollToBottom();
                 } else if (event.error) {
+                    // 立即移除 typing indicator，显示错误，不再等后续事件
                     if (!contentDiv) {
                         typingEl.remove();
                         contentDiv = addStreamingMessage().contentDiv;
                     }
-                    contentDiv.textContent = `出错：${event.error}`;
+                    contentDiv.innerHTML = `<span style="color:var(--warning)">⚠️ ${event.error}</span>`;
+                    scrollToBottom();
+                    // 跳出内层 for 循环，break 外层 while
+                    reader.cancel();
+                    break;
                 }
             }
         }
@@ -1437,6 +1465,19 @@ function loadGeneralSetting(key, defaultValue) {
 
 function saveGeneralSetting(key, value) {
     localStorage.setItem(`general_${key}`, JSON.stringify(value));
+}
+
+/**
+ * 根据切分方式显示/隐藏分块大小和重叠参数。
+ * markdown（标题树）和 semantic（语义）不依赖这两个参数，隐藏以避免干扰。
+ * @param {'fixed'|'recursive'|'markdown'|'semantic'} method
+ */
+function _updateChunkParamVisibility(method) {
+    const show = method === 'fixed' || method === 'recursive';
+    const sizeField = document.getElementById('chunkSizeField');
+    const overlapField = document.getElementById('chunkOverlapField');
+    if (sizeField) sizeField.style.display = show ? '' : 'none';
+    if (overlapField) overlapField.style.display = show ? '' : 'none';
 }
 
 // ── 主题管理 ────────────────────────────────────────────────
