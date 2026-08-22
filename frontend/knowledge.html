@@ -8,6 +8,8 @@
     <title>知识库管理 - ponyrag知识库系统</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><circle cx='32' cy='32' r='30' fill='%236366f1'/><text x='32' y='44' text-anchor='middle' fill='white' font-size='28' font-weight='bold' font-family='Arial'>AI</text></svg>">
     <link rel="stylesheet" href="/static/style.css">
+    <!-- 国际化 -->
+    <script src="/static/i18n.js"></script>
     <!-- 立即应用主题，防止深色模式下页面闪白 -->
     <script>
         (function() {
@@ -27,7 +29,7 @@
         <!-- 侧边栏 -->
         <aside class="sidebar" id="sidebar">
             <div class="sidebar-header">
-                <h2>ponyrag知识库系统</h2>
+                <h2 data-i18n="app.title">ponyrag知识库系统</h2>
                 <button class="sidebar-toggle" id="sidebarToggle" title="收起侧边栏">
                     <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
                         <polyline points="15 18 9 12 15 6"></polyline>
@@ -37,42 +39,42 @@
 
             <!-- 导航菜单 -->
             <div class="sidebar-section">
-                <h3>导航</h3>
+                <h3 data-i18n="sidebar.nav">导航</h3>
                 <nav class="nav-menu">
                     <a href="/" class="nav-item">
                         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
                         </svg>
-                        <span>聊天对话</span>
+                        <span data-i18n="nav.chat">聊天对话</span>
                     </a>
                     <a href="/knowledge" class="nav-item active">
                         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
                             <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
                         </svg>
-                        <span>知识库管理</span>
+                        <span data-i18n="nav.knowledge">知识库管理</span>
                     </a>
                 </nav>
             </div>
 
             <!-- 系统状态 -->
             <div class="sidebar-section">
-                <h3>系统状态</h3>
+                <h3 data-i18n="sidebar.status">系统状态</h3>
                 <div class="status-info">
                     <div class="status-item">
-                        <span class="status-label">知识库数量:</span>
+                        <span class="status-label" data-i18n="kb.count">知识库数量:</span>
                         <span class="status-value" id="kbCount">-</span>
                     </div>
                     <div class="status-item">
-                        <span class="status-label">启用状态:</span>
+                        <span class="status-label" data-i18n="kb.enabledCount">启用状态:</span>
                         <span class="status-value" id="enabledCount">-</span>
                     </div>
                     <div class="status-item">
-                        <span class="status-label">向量库条目:</span>
+                        <span class="status-label" data-i18n="kb.vectorCount">向量库条目:</span>
                         <span class="status-value" id="dbCount">-</span>
                     </div>
                     <div class="status-item">
-                        <span class="status-label">上传文件:</span>
+                        <span class="status-label" data-i18n="kb.fileCount">上传文件:</span>
                         <span class="status-value" id="fileCount">-</span>
                     </div>
                 </div>
@@ -93,13 +95,13 @@
                 </button>
 
                 <div class="topbar-title">
-                    <h1>知识库管理</h1>
+                    <h1 data-i18n="kb.pageTitle">知识库管理</h1>
                 </div>
 
                 <div class="topbar-actions">
                     <span class="connection-status" id="connectionStatus">
                         <span class="status-dot"></span>
-                        <span class="status-text">连接中...</span>
+                        <span class="status-text" data-i18n="app.connecting">连接中...</span>
                     </span>
                 </div>
             </header>
@@ -114,7 +116,7 @@
                             <line x1="12" y1="5" x2="12" y2="19"></line>
                             <line x1="5" y1="12" x2="19" y2="12"></line>
                         </svg>
-                        创建知识库
+                        <span data-i18n="kb.create">创建知识库</span>
                     </button>
                 </div>
 
@@ -131,25 +133,28 @@
     <!-- 创建/编辑知识库 Modal -->
     <div class="modal-overlay" id="kbModal" style="display:none;">
         <div class="modal">
-            <h3 class="modal-title" id="kbModalTitle">创建知识库</h3>
+            <h3 class="modal-title" id="kbModalTitle" data-i18n="kb.modal.create">创建知识库</h3>
 
             <div class="modal-body">
                 <div class="settings-field">
-                    <label>知识库名称 <span style="color: var(--danger);">*</span></label>
-                    <input type="text" id="kbNameInput" class="model-select" placeholder="例如：客服知识库" maxlength="50">
+                    <label><span data-i18n="kb.modal.nameRequired">知识库名称 *</span></label>
+                    <input type="text" id="kbNameInput" class="model-select" data-i18n-attr="placeholder" data-i18n="kb.modal.namePlaceholder" placeholder="例如：客服知识库" maxlength="50">
                 </div>
 
                 <div class="settings-field">
-                    <label>描述 <span style="color: var(--text-secondary); font-size: 0.85rem;">(可选)</span></label>
-                    <textarea id="kbDescInput" class="kb-desc-input" placeholder="简要描述知识库的用途..." rows="3" maxlength="200"></textarea>
+                    <label>
+                        <span data-i18n="kb.modal.desc">描述</span>
+                        <span style="color: var(--text-secondary); font-size: 0.85rem;" data-i18n="kb.modal.descOptional">(可选)</span>
+                    </label>
+                    <textarea id="kbDescInput" class="kb-desc-input" data-i18n-attr="placeholder" data-i18n="kb.modal.descPlaceholder" placeholder="简要描述知识库的用途..." rows="3" maxlength="200"></textarea>
                 </div>
 
                 <p class="settings-hint" id="kbModalHint"></p>
             </div>
 
             <div class="modal-actions">
-                <button class="btn btn-secondary" id="kbCancelBtn">取消</button>
-                <button class="btn btn-primary" id="kbSaveBtn">保存</button>
+                <button class="btn btn-secondary" id="kbCancelBtn" data-i18n="btn.cancel">取消</button>
+                <button class="btn btn-primary" id="kbSaveBtn" data-i18n="btn.save">保存</button>
             </div>
         </div>
     </div>
@@ -166,13 +171,13 @@
                 </svg>
             </div>
 
-            <h3 class="modal-title">删除知识库</h3>
+            <h3 class="modal-title" data-i18n="kb.delete.title">删除知识库</h3>
             <p class="modal-body" id="deleteKbModalBody">确定要删除该知识库吗？</p>
-            <p class="modal-hint">此操作将删除知识库中的所有文档和向量数据，不可恢复。</p>
+            <p class="modal-hint" data-i18n="kb.delete.hint">此操作将删除知识库中的所有文档和向量数据，不可恢复。</p>
 
             <div class="modal-actions">
-                <button class="btn btn-secondary" id="deleteKbCancelBtn">取消</button>
-                <button class="btn btn-danger" id="deleteKbConfirmBtn">删除</button>
+                <button class="btn btn-secondary" id="deleteKbCancelBtn" data-i18n="btn.cancel">取消</button>
+                <button class="btn btn-danger" id="deleteKbConfirmBtn" data-i18n="btn.delete">删除</button>
             </div>
         </div>
     </div>
@@ -181,7 +186,7 @@
     <div class="modal-overlay" id="docsModal" style="display:none;">
         <div class="modal docs-modal">
             <div class="modal-header">
-                <h3 class="modal-title" id="docsModalTitle">文档管理</h3>
+                <h3 class="modal-title" id="docsModalTitle" data-i18n="docs.title">文档管理</h3>
                 <button class="icon-btn" id="docsCloseBtn">
                     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
                         <line x1="18" y1="6" x2="6" y2="18"></line>
@@ -201,20 +206,20 @@
                             <polyline points="17 8 12 3 7 8"></polyline>
                             <line x1="12" y1="3" x2="12" y2="15"></line>
                         </svg>
-                        上传文档
+                        <span data-i18n="docs.upload">上传文档</span>
                     </button>
                     <button class="btn btn-folder btn-sm" id="docsFolderBtn">
                         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
                         </svg>
-                        上传目录
+                        <span data-i18n="docs.uploadDir">上传目录</span>
                     </button>
                     <button class="btn btn-danger btn-sm" id="docsBatchDeleteBtn" disabled>
                         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
                             <polyline points="3 6 5 6 21 6"></polyline>
                             <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
                         </svg>
-                        <span id="docsBatchDeleteText">批量删除</span>
+                        <span id="docsBatchDeleteText" data-i18n="docs.batchDelete">批量删除</span>
                     </button>
                 </div>
 
@@ -224,30 +229,33 @@
                         <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
                             <polyline points="9 18 15 12 9 6"></polyline>
                         </svg>
-                        切分参数
-                        <span class="upload-chunk-badge" id="uploadChunkBadge">使用全局设置</span>
+                        <span data-i18n="docs.chunkParams">切分参数</span>
+                        <span class="upload-chunk-badge" id="uploadChunkBadge" data-i18n="docs.chunkGlobal">使用全局设置</span>
                     </summary>
                     <div class="upload-chunk-body">
-                        <!-- 切分方式 -->
                         <div class="upload-chunk-row">
-                            <label class="upload-chunk-label">切分方式</label>
+                            <label class="upload-chunk-label" data-i18n="docs.chunkMethod">切分方式</label>
                             <select id="uploadChunkMethod" class="upload-chunk-select">
-                                <option value="">— 使用全局设置 —</option>
-                                <option value="fixed">✂️ 固定切分 · 适合：纯文本、日志、数据导出</option>
-                                <option value="recursive">🔀 递归切分（推荐）· 适合：通用文档</option>
-                                <option value="markdown">📑 标题树切分 · 适合：保险条款、产品手册</option>
-                                <option value="semantic">🧠 语义切分（较慢）· 适合：文章、报告、书籍</option>
+                                <option value="" data-i18n="docs.chunkGlobal">— 使用全局设置 —</option>
+                                <option value="fixed" data-i18n="chunk.fixed.desc.short">✂️ 固定切分 · 适合：纯文本、日志、数据导出</option>
+                                <option value="recursive" data-i18n="chunk.recursive.desc.short">🔀 递归切分（推荐）· 适合：通用文档</option>
+                                <option value="markdown" data-i18n="chunk.markdown.desc.short">📑 标题树切分 · 适合：保险条款、产品手册</option>
+                                <option value="semantic" data-i18n="chunk.semantic.desc.short">🧠 语义切分（较慢）· 适合：文章、报告、书籍</option>
                             </select>
                         </div>
-                        <!-- 分块大小 -->
                         <div class="upload-chunk-row" id="uploadSizeRow">
-                            <label class="upload-chunk-label">分块大小 <span class="upload-chunk-hint">token</span></label>
-                            <input type="number" id="uploadChunkSize" class="upload-chunk-num" min="100" max="2000" step="50" placeholder="全局">
+                            <label class="upload-chunk-label">
+                                <span data-i18n="docs.chunkSize">分块大小</span>
+                                <span class="upload-chunk-hint" data-i18n="docs.chunkSizeUnit">token</span>
+                            </label>
+                            <input type="number" id="uploadChunkSize" class="upload-chunk-num" min="100" max="2000" step="50" placeholder="500">
                         </div>
-                        <!-- 分块重叠 -->
                         <div class="upload-chunk-row" id="uploadOverlapRow">
-                            <label class="upload-chunk-label">分块重叠 <span class="upload-chunk-hint">token</span></label>
-                            <input type="number" id="uploadChunkOverlap" class="upload-chunk-num" min="0" max="500" step="10" placeholder="全局">
+                            <label class="upload-chunk-label">
+                                <span data-i18n="docs.chunkOverlap">分块重叠</span>
+                                <span class="upload-chunk-hint" data-i18n="docs.chunkSizeUnit">token</span>
+                            </label>
+                            <input type="number" id="uploadChunkOverlap" class="upload-chunk-num" min="0" max="500" step="10" placeholder="50">
                         </div>
                     </div>
                 </details>
@@ -257,27 +265,27 @@
                     <div class="progress-bar">
                         <div class="progress-fill" id="docsProgressFill"></div>
                     </div>
-                    <span class="progress-text" id="docsProgressText">上传中...</span>
+                    <span class="progress-text" id="docsProgressText" data-i18n="docs.uploading">上传中...</span>
                 </div>
 
                 <!-- 文档列表 -->
                 <div class="docs-list" id="docsList">
-                    <div class="empty-state">加载中...</div>
+                    <div class="empty-state" data-i18n="kb.loading">加载中...</div>
                 </div>
             </div>
 
             <!-- 底部按钮区 -->
             <div class="modal-actions">
-                <button class="btn btn-secondary" id="docsModalCloseBtn">关闭</button>
+                <button class="btn btn-secondary" id="docsModalCloseBtn" data-i18n="btn.close">关闭</button>
             </div>
         </div>
     </div>
 
     <!-- 重新切分 Modal -->
     <div class="modal-overlay" id="rechunkModal" style="display:none;">
-        <div class="modal" style="max-width: 420px; text-align:left;">
+        <div class="modal" style="max-width: min(520px, 92vw); width: auto; text-align:left;">
             <div class="modal-header">
-                <h3 class="modal-title">修改切分方式</h3>
+                <h3 class="modal-title" data-i18n="docs.rechunk">修改切分方式</h3>
                 <button class="icon-btn" onclick="closeRechunkModal()">
                     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
                         <line x1="18" y1="6" x2="6" y2="18"></line>
@@ -287,33 +295,30 @@
             </div>
             <div class="modal-body" style="padding: 16px 20px;">
                 <p id="rechunkFilename" style="font-size:0.85rem; color:var(--text-secondary); margin-bottom:14px; word-break:break-all;"></p>
-
                 <div class="settings-field">
-                    <label style="font-size:0.85rem; font-weight:500;">切分方式</label>
+                    <label style="font-size:0.85rem; font-weight:500;" data-i18n="docs.chunkMethod">切分方式</label>
                     <select id="rechunkMethod" class="upload-chunk-select" style="margin-top:6px;" onchange="updateRechunkSizeVisibility()">
-                        <option value="fixed">✂️ 固定切分 · 适合：纯文本、日志</option>
-                        <option value="recursive" selected>🔀 递归切分（推荐）· 适合：通用文档</option>
-                        <option value="markdown">📑 标题树切分 · 适合：保险条款、产品手册</option>
-                        <option value="semantic">🧠 语义切分（较慢）· 适合：文章、报告</option>
+                        <option value="fixed" data-i18n="chunk.fixed.desc.short">✂️ 固定切分 · 适合：纯文本、日志</option>
+                        <option value="recursive" selected data-i18n="chunk.recursive.desc.short">🔀 递归切分（推荐）· 适合：通用文档</option>
+                        <option value="markdown" data-i18n="chunk.markdown.desc.short">📑 标题树切分 · 适合：保险条款、产品手册</option>
+                        <option value="semantic" data-i18n="chunk.semantic.desc.short">🧠 语义切分（较慢）· 适合：文章、报告</option>
                     </select>
                 </div>
-
                 <div id="rechunkSizeFields">
                     <div class="settings-field" style="margin-top:10px;">
-                        <label style="font-size:0.85rem; font-weight:500;">分块大小 (token)</label>
+                        <label style="font-size:0.85rem; font-weight:500;" data-i18n="docs.chunkSize">分块大小 (token)</label>
                         <input type="number" id="rechunkSize" class="upload-chunk-num" style="width:100%; margin-top:6px;" min="100" max="2000" step="50" value="500">
                     </div>
                     <div class="settings-field" style="margin-top:10px;">
-                        <label style="font-size:0.85rem; font-weight:500;">分块重叠 (token)</label>
+                        <label style="font-size:0.85rem; font-weight:500;" data-i18n="docs.chunkOverlap">分块重叠 (token)</label>
                         <input type="number" id="rechunkOverlap" class="upload-chunk-num" style="width:100%; margin-top:6px;" min="0" max="500" step="10" value="50">
                     </div>
                 </div>
-
                 <p id="rechunkHint" style="font-size:0.82rem; color:var(--text-secondary); margin-top:12px;"></p>
             </div>
             <div class="modal-actions">
-                <button class="btn btn-secondary" onclick="closeRechunkModal()">取消</button>
-                <button class="btn btn-primary" id="rechunkConfirmBtn" onclick="confirmRechunk()">重新切分</button>
+                <button class="btn btn-secondary" onclick="closeRechunkModal()" data-i18n="btn.cancel">取消</button>
+                <button class="btn btn-primary" id="rechunkConfirmBtn" onclick="confirmRechunk()" data-i18n="docs.rechunkConfirm">重新切分</button>
             </div>
         </div>
     </div>
@@ -322,7 +327,7 @@
     <div class="modal-overlay" id="deleteDocModal" style="display:none;">
         <div class="modal" style="max-width: 420px;">
             <div class="modal-header">
-                <h3 class="modal-title">删除文档</h3>
+                <h3 class="modal-title" data-i18n="docs.delete.title">删除文档</h3>
                 <button class="icon-btn" onclick="closeDeleteDocModal()">
                     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
                         <line x1="18" y1="6" x2="6" y2="18"></line>
@@ -340,11 +345,11 @@
                     </svg>
                 </div>
                 <p id="deleteDocModalBody" style="word-break:break-all; margin-bottom:8px;"></p>
-                <p style="font-size:0.85rem; color:var(--text-secondary);">此操作不可恢复。</p>
+                <p style="font-size:0.85rem; color:var(--text-secondary);" data-i18n="docs.delete.hint">此操作不可恢复。</p>
             </div>
             <div class="modal-actions">
-                <button class="btn btn-secondary" onclick="closeDeleteDocModal()">取消</button>
-                <button class="btn btn-danger" id="deleteDocConfirmBtn">删除</button>
+                <button class="btn btn-secondary" onclick="closeDeleteDocModal()" data-i18n="btn.cancel">取消</button>
+                <button class="btn btn-danger" id="deleteDocConfirmBtn" data-i18n="btn.delete">删除</button>
             </div>
         </div>
     </div>
@@ -353,7 +358,7 @@
     <div class="modal-overlay" id="uploadResultModal" style="display:none;">
         <div class="modal" style="max-width: 520px;">
             <div class="modal-header">
-                <h3 class="modal-title" id="uploadResultTitle">上传完成</h3>
+                <h3 class="modal-title" id="uploadResultTitle" data-i18n="upload.title">上传完成</h3>
                 <button class="icon-btn" onclick="closeUploadResult()">
                     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
                         <line x1="18" y1="6" x2="6" y2="18"></line>
@@ -364,7 +369,7 @@
             <div class="modal-body" style="padding: 16px 20px;">
                 <p id="uploadResultSummary" style="margin-bottom: 12px;"></p>
                 <div id="uploadFailedList" style="display:none;">
-                    <p style="font-weight:600; margin-bottom:8px; color: var(--danger);">以下文档未能成功上传：</p>
+                    <p id="uploadFailedTitle" data-i18n="upload.failed" style="font-weight:600; margin-bottom:8px; color: var(--danger);">以下文档未能成功上传：</p>
                     <div id="uploadFailedItems" style="
                         max-height: 240px;
                         overflow-y: auto;
@@ -376,12 +381,15 @@
                 </div>
             </div>
             <div class="modal-actions">
-                <button class="btn btn-primary" onclick="closeUploadResult()">确定</button>
+                <button class="btn btn-primary" onclick="closeUploadResult()" data-i18n="btn.confirm">确定</button>
             </div>
         </div>
     </div>
 
     <script src="/static/knowledge.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => applyLang());
+    </script>
 
 </body>
 

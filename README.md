@@ -134,6 +134,7 @@
 #### 5. 通用设置
 - ✅ **主题切换** — 浅色 / 深色两种主题，设置后即时生效并跨页面持久保存
 - ✅ **流式输出开关** — 可随时切换逐字流式输出或等待完整答案一次性显示，默认关闭
+- ✅ **双语界面** — 支持中文 / English 切换，点击顶栏 `EN`/`中` 按钮或在通用设置中选择，即时生效无需刷新
 
 ### 📦 快速开始
 
@@ -504,6 +505,7 @@ Click the ⚙️ icon in the top-right corner to open the settings panel:
 
 - **Theme**: Click the **☀️ Light** or **🌙 Dark** card to switch themes instantly — no save needed, persists across page reloads
 - **Streaming Output**: Toggle real-time token-by-token output. When on, answers stream as they are generated; when off, the complete answer appears at once (default: off)
+- **Language**: Click **🇨🇳 中文** or **🇬🇧 English** in General settings, or use the **`EN`/`中`** quick-toggle button in the top bar — takes effect instantly
 
 ### ⚙️ Configuration
 

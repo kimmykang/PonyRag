@@ -58,6 +58,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initEventListeners();
     checkConnection();
     loadKnowledgeBases();
+    refreshChunkMethodSelects();
 });
 
 function initEventListeners() {
@@ -149,10 +150,10 @@ function updateConnectionStatus(connected) {
 
     if (connected) {
         dot.className = 'status-dot connected';
-        text.textContent = '已连接';
+        text.textContent = t('app.connected');
     } else {
         dot.className = 'status-dot disconnected';
-        text.textContent = '连接失败';
+        text.textContent = t('app.disconnected');
     }
 }
 
@@ -180,20 +181,28 @@ function renderKnowledgeBases() {
                     <circle cx="32" cy="32" r="30" fill="#6366f1" opacity="0.1" />
                     <path d="M20 28h24M20 36h24M20 44h16" stroke="#6366f1" stroke-width="2" stroke-linecap="round"/>
                 </svg>
-                <p>暂无知识库</p>
-                <p style="font-size: 0.9rem; color: var(--text-secondary);">点击「创建知识库」按钮开始</p>
+                <p>${t('kb.empty')}</p>
+                <p style="font-size: 0.9rem; color: var(--text-secondary);">${t('kb.emptyHint')}</p>
             </div>
         `;
         return;
     }
 
-    grid.innerHTML = state.knowledgeBases.map(kb => `
+    grid.innerHTML = state.knowledgeBases.map(kb => {
+        // 默认知识库名称国际化
+        const displayName = kb.kb_id === 'knowledge_base' ?
+            t('kb.defaultName') :
+            escapeHtml(kb.name);
+        const displayDesc = kb.kb_id === 'knowledge_base' ?
+            t('kb.defaultDesc') :
+            (kb.description ? escapeHtml(kb.description) : '');
+        return `
         <div class="kb-card ${kb.enabled ? '' : 'kb-disabled'}">
             <div class="kb-card-header">
-                <h3 class="kb-card-title">${escapeHtml(kb.name)}</h3>
+                <h3 class="kb-card-title">${displayName}</h3>
                 <div class="kb-card-actions">
                     ${kb.kb_id === 'knowledge_base' ? '' : `
-                        <button class="icon-btn" onclick="toggleKbEnabled('${kb.kb_id}', ${kb.enabled})" title="${kb.enabled ? '禁用' : '启用'}">
+                        <button class="icon-btn" onclick="toggleKbEnabled('${kb.kb_id}', ${kb.enabled})" title="${kb.enabled ? t('kb.disable') : t('kb.enable')}">
                             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
                                 ${kb.enabled 
                                     ? '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle>'
@@ -201,13 +210,13 @@ function renderKnowledgeBases() {
                                 }
                             </svg>
                         </button>
-                        <button class="icon-btn" onclick="openEditKbModal('${kb.kb_id}')" title="编辑">
+                        <button class="icon-btn" onclick="openEditKbModal('${kb.kb_id}')" title="${t('kb.edit')}">
                             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
                                 <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
                                 <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
                             </svg>
                         </button>
-                        <button class="icon-btn" onclick="openDeleteKbModal('${kb.kb_id}')" title="删除">
+                        <button class="icon-btn" onclick="openDeleteKbModal('${kb.kb_id}')" title="${t('kb.deleteKb')}">
                             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
                                 <polyline points="3 6 5 6 21 6"></polyline>
                                 <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
@@ -217,21 +226,21 @@ function renderKnowledgeBases() {
                 </div>
             </div>
             
-            ${kb.description ? `<p class="kb-card-desc">${escapeHtml(kb.description)}</p>` : ''}
+            ${displayDesc ? `<p class="kb-card-desc">${displayDesc}</p>` : ''}
             
             <div class="kb-card-stats">
                 <div class="kb-stat-item">
-                    <span class="kb-stat-label">文档</span>
+                    <span class="kb-stat-label">${t('kb.docs')}</span>
                     <span class="kb-stat-value">${kb.document_count || 0}</span>
                 </div>
                 <div class="kb-stat-item">
-                    <span class="kb-stat-label">向量</span>
+                    <span class="kb-stat-label">${t('kb.vectors')}</span>
                     <span class="kb-stat-value">${kb.vector_count || 0}</span>
                 </div>
                 <div class="kb-stat-item">
-                    <span class="kb-stat-label">状态</span>
+                    <span class="kb-stat-label">${t('kb.status')}</span>
                     <span class="kb-stat-badge ${kb.enabled ? 'enabled' : 'disabled'}">
-                        ${kb.enabled ? '已启用' : '已禁用'}
+                        ${kb.enabled ? t('kb.enabled') : t('kb.disabled')}
                     </span>
                 </div>
             </div>
@@ -241,20 +250,20 @@ function renderKnowledgeBases() {
                     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
                     </svg>
-                    对话
+                    ${t('kb.chat')}
                 </button>
                 <button class="btn btn-primary btn-sm" onclick="manageDocuments('${kb.kb_id}')">
                     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
                         <polyline points="14 2 14 8 20 8"></polyline>
                     </svg>
-                    管理文档
+                    ${t('kb.manage')}
                 </button>
             </div>
         </div>
-    `).join('');
+    `;
+    }).join('');
 }
-
 async function updateStats() {
     // 更新知识库数量和启用状态
     dom.kbCount.textContent = state.knowledgeBases.length;
@@ -283,7 +292,7 @@ async function updateStats() {
 // 创建知识库 Modal
 function openCreateKbModal() {
     state.currentEditingKb = null;
-    dom.kbModalTitle.textContent = '创建知识库';
+    dom.kbModalTitle.textContent = t('kb.modal.create');
     dom.kbNameInput.value = '';
     dom.kbDescInput.value = '';
     dom.kbModalHint.textContent = '';
@@ -297,7 +306,7 @@ function openEditKbModal(kbId) {
     if (!kb) return;
 
     state.currentEditingKb = kb;
-    dom.kbModalTitle.textContent = '编辑知识库';
+    dom.kbModalTitle.textContent = t('kb.modal.edit');
     dom.kbNameInput.value = kb.name;
     dom.kbDescInput.value = kb.description || '';
     dom.kbModalHint.textContent = '';
@@ -321,7 +330,7 @@ async function saveKnowledgeBase() {
         return;
     }
 
-    dom.kbModalHint.textContent = '保存中...';
+    dom.kbModalHint.textContent = t('kb.saving');
     dom.kbModalHint.style.color = 'var(--text-secondary)';
     dom.kbSaveBtn.disabled = true;
 
@@ -472,7 +481,7 @@ async function openDocsModal(kbId) {
     const titleEl = document.getElementById('docsModalTitle');
     console.log('标题元素:', titleEl);
     if (titleEl) {
-        titleEl.textContent = `文档管理 - ${kb.name}`;
+        titleEl.textContent = `${t('docs.title')} - ${kb.name}`;
     }
 
     // 显示 Modal
@@ -570,10 +579,10 @@ function renderDocuments() {
 
     // 表格HTML
     const METHOD_LABEL = {
-        'fixed': '✂️ 固定',
-        'recursive': '🔀 递归',
-        'markdown': '📑 标题树',
-        'semantic': '🧠 语义',
+        'fixed': `✂️ ${t('chunk.fixed.short')}`,
+        'recursive': `🔀 ${t('chunk.recursive.short')}`,
+        'markdown': `📑 ${t('chunk.markdown.short')}`,
+        'semantic': `🧠 ${t('chunk.semantic.short')}`,
     };
 
     let tableHTML = `
@@ -584,10 +593,10 @@ function renderDocuments() {
                         <input type="checkbox" id="selectAllDocs" onchange="window.toggleSelectAll()">
                     </th>
                     <th style="width: 60px;"></th>
-                    <th>文件名</th>
-                    <th style="width: 130px;">切分类型</th>
-                    <th style="width: 180px;">上传时间</th>
-                    <th style="width: 80px; text-align: center;">操作</th>
+                    <th>${t('docs.colName')}</th>
+                    <th style="width: 130px;">${t('docs.colChunk')}</th>
+                    <th style="width: 180px;">${t('docs.colTime')}</th>
+                    <th style="width: 80px; text-align: center;">${t('docs.colAction')}</th>
                 </tr>
             </thead>
             <tbody>`;
@@ -628,16 +637,16 @@ function renderDocuments() {
                 <td class="doc-chunk-cell">
                     ${doc.chunk_method
                         ? `<span class="chunk-method-tag ${doc.up_to_date === false ? 'stale' : ''} chunk-tag-clickable"
-                               title="点击修改切分方式"
+                               title="${t('docs.rechunk')}"
                                onclick="window.openRechunkPanel('${safeName}', '${doc.chunk_method}', ${doc.chunk_size}, ${doc.chunk_overlap})">
                                ${METHOD_LABEL[doc.chunk_method] || doc.chunk_method}
-                               <span class="chunk-count">${doc.chunk_count}块</span>
+                               <span class="chunk-count">${doc.chunk_count}${t('chunk.fixed.short') !== 'Fixed' ? '块' : ''}</span>
                                ✏️
                            </span>`
                         : `<span class="chunk-method-tag none chunk-tag-clickable"
-                               title="点击设置切分方式"
+                               title="${t('docs.rechunk')}"
                                onclick="window.openRechunkPanel('${safeName}', 'recursive', 500, 50)">
-                               旧版·递归 ✏️
+                               ${t('docs.legacy')} ✏️
                            </span>`
                     }
                 </td>
@@ -734,7 +743,7 @@ function updateBatchDeleteBtn() {
 
     const count = state.selectedDocs.size;
     btn.disabled = count === 0;
-    text.textContent = count > 0 ? `批量删除 (${count})` : '批量删除';
+    text.textContent = count > 0 ? `${t('docs.batchDelete')} (${count})` : t('docs.batchDelete');
 }
 
 // 支持的文件扩展名
@@ -916,6 +925,7 @@ function closeDeleteDocModal() {
 
 function showDeleteDocModal(bodyText, onConfirm) {
     document.getElementById('deleteDocModalBody').textContent = bodyText;
+    applyLang(); // 更新 data-i18n 文字（标题、按钮等）
 
     // 重新绑定确认按钮，避免重复监听
     const btn = document.getElementById('deleteDocConfirmBtn');
@@ -939,7 +949,10 @@ async function handleBatchDelete() {
 
     const count = state.selectedDocs.size;
     const fileList = Array.from(state.selectedDocs).map(name => `• ${name}`).join('\n');
-    const bodyText = `确定要删除知识库「${kb.name}」中的 ${count} 个文档？\n\n${fileList}`;
+    const bodyText = t('docs.batchDelete.confirm', {
+        kb: kb.name,
+        count: count
+    }) + `\n\n${fileList}`;
 
     showDeleteDocModal(bodyText, async () => {
         const btn = document.getElementById('docsBatchDeleteBtn');
@@ -986,7 +999,9 @@ async function deleteSingleDocument(filename) {
     const kb = state.knowledgeBases.find(k => k.kb_id === kbId);
     if (!kb) return;
 
-    showDeleteDocModal(`确定要删除文档「${filename}」吗？`, async () => {
+    showDeleteDocModal(t('docs.delete.confirm', {
+        name: filename
+    }), async () => {
         try {
             const res = await fetch(`${API_BASE}/api/documents/${encodeURIComponent(filename)}?kb_id=${encodeURIComponent(kbId)}`, {
                 method: 'DELETE',
@@ -1059,16 +1074,15 @@ function _updateUploadChunkPanel() {
     const overRow = document.getElementById('uploadOverlapRow');
 
     const METHOD_NAMES = {
-        '': '使用全局设置',
-        'fixed': '固定切分',
-        'recursive': '递归切分',
-        'markdown': '标题树切分',
-        'semantic': '语义切分',
+        '': t('docs.chunkGlobal'),
+        'fixed': t('chunk.fixed.short'),
+        'recursive': t('chunk.recursive.short'),
+        'markdown': t('chunk.markdown.short'),
+        'semantic': t('chunk.semantic.short'),
     };
 
     if (badge) badge.textContent = METHOD_NAMES[method] || method;
 
-    // 标题树 / 语义切分不需要大小和重叠
     const showSize = method === '' || method === 'fixed' || method === 'recursive';
     if (sizeRow) sizeRow.style.display = showSize ? '' : 'none';
     if (overRow) overRow.style.display = showSize ? '' : 'none';
@@ -1114,7 +1128,7 @@ async function confirmRechunk() {
     const btn = document.getElementById('rechunkConfirmBtn');
 
     hint.style.color = 'var(--text-secondary)';
-    hint.textContent = '正在重新切分，请稍候...';
+    hint.textContent = t('docs.rechunkDoing');
     btn.disabled = true;
 
     try {
@@ -1151,3 +1165,236 @@ async function confirmRechunk() {
         btn.disabled = false;
     }
 }
+
+// ── 切分方式下拉框国际化 ─────────────────────────────────────
+
+function refreshChunkMethodSelects() {
+    var globalLabel = '— ' + t('docs.chunkGlobal') + ' —';
+    var methods = [{
+            value: 'fixed',
+            text: function() {
+                return t('chunk.fixed') + ' - ' + t('chunk.fixed.hint');
+            }
+        },
+        {
+            value: 'recursive',
+            text: function() {
+                return t('chunk.recursive') + ' (' + t('chunk.recursive.tag') + ') - ' + t('chunk.recursive.hint');
+            }
+        },
+        {
+            value: 'markdown',
+            text: function() {
+                return t('chunk.markdown') + ' - ' + t('chunk.markdown.hint');
+            }
+        },
+        {
+            value: 'semantic',
+            text: function() {
+                return t('chunk.semantic') + ' (' + t('chunk.semantic.tag') + ') - ' + t('chunk.semantic.hint');
+            }
+        },
+    ];
+
+    var sel1 = document.getElementById('uploadChunkMethod');
+    if (sel1) {
+        var cur1 = sel1.value;
+        sel1.innerHTML = '';
+        var opt0 = document.createElement('option');
+        opt0.value = '';
+        opt0.textContent = globalLabel;
+        if (cur1 === '') opt0.selected = true;
+        sel1.appendChild(opt0);
+        methods.forEach(function(m) {
+            var opt = document.createElement('option');
+            opt.value = m.value;
+            opt.textContent = m.text();
+            if (m.value === cur1) opt.selected = true;
+            sel1.appendChild(opt);
+        });
+    }
+
+    var sel2 = document.getElementById('rechunkMethod');
+    if (sel2) {
+        var cur2 = sel2.value;
+        sel2.innerHTML = '';
+        methods.forEach(function(m) {
+            var opt = document.createElement('option');
+            opt.value = m.value;
+            opt.textContent = m.text();
+            if (m.value === cur2) opt.selected = true;
+            sel2.appendChild(opt);
+        });
+    }
+}
+
+// ── loadDocuments 增强版（含切分记录 + 下载链接）─────────────
+
+async function loadDocuments(kbId) {
+    const docsList = document.getElementById('docsList');
+    docsList.innerHTML = `<div class="empty-state">${t('kb.loading')}</div>`;
+
+    try {
+        const [res, recRes] = await Promise.all([
+            fetch(`${API_BASE}/api/documents?kb_id=${encodeURIComponent(kbId)}`),
+            fetch(`${API_BASE}/api/documents/chunk-records?kb_id=${encodeURIComponent(kbId)}`),
+        ]);
+
+        const data = await res.json();
+        const recData = recRes.ok ? await recRes.json() : {
+            records: []
+        };
+        if (!res.ok) throw new Error(data.detail || t('loading'));
+
+        const chunkRecMap = {};
+        (recData.records || []).forEach(r => {
+            chunkRecMap[r.filename] = r;
+        });
+
+        state.documents = (data.documents || []).map(doc => {
+            const mdName = (doc.filename || doc.name).replace(/\.[^.]+$/, '.md');
+            const rec = chunkRecMap[mdName] || null;
+            return {
+                name: doc.filename || doc.name,
+                upload_time: doc.upload_time || (doc.created ? new Date(doc.created * 1000).toLocaleString('zh-CN') : t('unknown')),
+                size: doc.size,
+                md_ready: doc.md_ready,
+                chunk_method: rec ? rec.chunk_method : null,
+                chunk_size: rec ? rec.chunk_size : null,
+                chunk_count: rec ? rec.chunk_count : null,
+                up_to_date: rec ? rec.up_to_date : null,
+            };
+        });
+
+        // 加载参数填入 placeholder
+        try {
+            const paramsRes = await fetch(`${API_BASE}/api/config/rag-params`);
+            if (paramsRes.ok) {
+                const params = await paramsRes.json();
+                const sizeEl = document.getElementById('uploadChunkSize');
+                const overlapEl = document.getElementById('uploadChunkOverlap');
+                if (sizeEl) sizeEl.placeholder = String(params.chunk_size || 500);
+                if (overlapEl) overlapEl.placeholder = String(params.chunk_overlap || 50);
+            }
+        } catch (e) {
+            /* 忽略 */
+        }
+
+        renderDocuments();
+    } catch (e) {
+        console.error('加载文档列表失败:', e);
+        docsList.innerHTML = `<div class="empty-state">加载失败: ${e.message}</div>`;
+    }
+}
+
+// renderDocuments 覆盖版（含下载链接 + i18n）
+function renderDocuments() {
+    const docsList = document.getElementById('docsList');
+
+    if (state.documents.length === 0) {
+        docsList.innerHTML = `
+            <div class="empty-state">
+                <svg viewBox="0 0 64 64" width="48" height="48" fill="none">
+                    <circle cx="32" cy="32" r="30" fill="#6366f1" opacity="0.1" />
+                    <path d="M24 20h16M24 28h16M24 36h10" stroke="#6366f1" stroke-width="2" stroke-linecap="round"/>
+                </svg>
+                <p style="margin-top: 8px;">${t('docs.empty')}</p>
+                <p style="font-size: 0.85rem; color: var(--text-secondary);">${t('docs.emptyHint')}</p>
+            </div>
+        `;
+        updateBatchDeleteBtn();
+        return;
+    }
+
+    const METHOD_LABEL = {
+        'fixed': `✂️ ${t('chunk.fixed.short')}`,
+        'recursive': `🔀 ${t('chunk.recursive.short')}`,
+        'markdown': `📑 ${t('chunk.markdown.short')}`,
+        'semantic': `🧠 ${t('chunk.semantic.short')}`,
+    };
+
+    let tableHTML = `
+        <table class="docs-table">
+            <thead>
+                <tr>
+                    <th style="width: 50px; text-align: center;">
+                        <input type="checkbox" id="selectAllDocs" onchange="window.toggleSelectAll()">
+                    </th>
+                    <th style="width: 60px;"></th>
+                    <th>${t('docs.colName')}</th>
+                    <th style="width: 130px;">${t('docs.colChunk')}</th>
+                    <th style="width: 180px;">${t('docs.colTime')}</th>
+                    <th style="width: 80px; text-align: center;">${t('docs.colAction')}</th>
+                </tr>
+            </thead>
+            <tbody>`;
+
+    state.documents.forEach(doc => {
+        if (!doc || !doc.name) return;
+
+        const isSelected = state.selectedDocs.has(doc.name);
+        const fileExt = doc.name.split('.').pop().toLowerCase();
+        const fileIcon = getFileIcon(fileExt);
+        const safeName = doc.name.replace(/[&<>"']/g, char => ({
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#39;'
+        } [char]));
+
+        tableHTML += `
+            <tr class="doc-table-row ${isSelected ? 'selected' : ''}">
+                <td style="text-align: center;">
+                    <input type="checkbox" class="doc-checkbox" ${isSelected ? 'checked' : ''}
+                           onchange="window.toggleDocSelection('${safeName}')">
+                </td>
+                <td style="text-align: center; font-size: 24px;">${fileIcon}</td>
+                <td class="doc-name-cell" title="${safeName}">
+                    <a href="${API_BASE}/api/document/download?filename=${encodeURIComponent(safeName)}&kb_id=${encodeURIComponent(state.currentDocsKbId || 'knowledge_base')}"
+                       target="_blank" style="color:inherit;text-decoration:none;"
+                       onmouseover="this.style.textDecoration='underline'"
+                       onmouseout="this.style.textDecoration='none'">${safeName}</a>
+                </td>
+                <td class="doc-chunk-cell">
+                    ${doc.chunk_method
+                        ? `<span class="chunk-method-tag ${doc.up_to_date === false ? 'stale' : ''} chunk-tag-clickable"
+                               title="${t('docs.rechunk')}"
+                               onclick="window.openRechunkPanel('${safeName}', '${doc.chunk_method}', ${doc.chunk_size}, ${doc.chunk_overlap})">
+                               ${METHOD_LABEL[doc.chunk_method] || doc.chunk_method}
+                               <span class="chunk-count">${doc.chunk_count}${getCurrentLang() === 'en' ? '' : '块'}</span>
+                               ✏️
+                           </span>`
+                        : `<span class="chunk-method-tag none chunk-tag-clickable"
+                               title="${t('docs.rechunk')}"
+                               onclick="window.openRechunkPanel('${safeName}', 'recursive', 500, 50)">
+                               ${t('docs.legacy')} ✏️
+                           </span>`
+                    }
+                </td>
+                <td class="doc-time-cell">${doc.upload_time || t('unknown')}</td>
+                <td style="text-align: center;">
+                    <button class="icon-btn doc-delete-btn" onclick="window.deleteSingleDocument('${safeName}')" title="${t('btn.delete')}">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="3 6 5 6 21 6"></polyline>
+                            <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
+                            <path d="M10 11v6M14 11v6"></path>
+                        </svg>
+                    </button>
+                </td>
+            </tr>`;
+    });
+
+    tableHTML += '</tbody></table>';
+    docsList.innerHTML = tableHTML;
+    updateBatchDeleteBtn();
+    updateSelectAllCheckbox();
+}
+
+// ── langchange 事件监听 ──────────────────────────────────────
+
+document.addEventListener('langchange', function() {
+    renderKnowledgeBases();
+    refreshChunkMethodSelects();
+    if (state.currentDocsKbId) renderDocuments();
+});

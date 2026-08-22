@@ -101,6 +101,8 @@ const dom = {
  */
 document.addEventListener('DOMContentLoaded', async () => {
     initTheme(); // 先应用主题，避免样式跳变
+    applyLang(); // 应用当前语言
+    _updateLangToggleBtn(); // 初始化语言切换按钮
     initEventListeners();
     checkConnection();
 
@@ -273,24 +275,22 @@ function renderKnowledgeBaseSelector() {
 function renderChatKbSelector() {
     const select = dom.chatKbSelect;
     if (!select) {
-        console.log('[renderChatKbSelector] 选择器不存在');
         return;
     }
 
-    // 只显示已启用的知识库
     const enabledKbs = state.knowledgeBases.filter(kb => kb.enabled);
 
-    // 添加"所有已启用的知识库"选项
-    let options = '<option value="all">所有已启用的知识库</option>';
+    // "所有已启用的知识库"选项用 t() 翻译
+    let options = `<option value="all">${t('sidebar.allKb')}</option>`;
 
-    // 添加单个知识库选项
-    options += enabledKbs.map(kb =>
-        `<option value="${kb.kb_id}">${escapeHtml(kb.name)}</option>`
-    ).join('');
+    // 知识库名称：默认知识库走 i18n，其他直接显示
+    options += enabledKbs.map(kb => {
+        const displayName = kb.kb_id === 'knowledge_base' ? t('kb.defaultName') : escapeHtml(kb.name);
+        return `<option value="${kb.kb_id}">${displayName}</option>`;
+    }).join('');
 
     select.innerHTML = options;
 
-    // 如果是从知识库管理页跳转过来，设置对应选项为选中
     if (state.selectedKbIds && state.selectedKbIds.length === 1) {
         const targetId = state.selectedKbIds[0];
         if (enabledKbs.find(kb => kb.kb_id === targetId)) {
@@ -356,10 +356,10 @@ function updateConnectionStatus(connected) {
 
     if (connected) {
         dot.className = 'status-dot connected';
-        text.textContent = '已连接';
+        text.textContent = t('app.connected');
     } else {
         dot.className = 'status-dot disconnected';
-        text.textContent = '连接失败';
+        text.textContent = t('app.disconnected');
     }
 }
 
@@ -402,6 +402,9 @@ async function openSettingsModal() {
     const modal = document.getElementById('settingsModal');
     const hint = document.getElementById('settingsHint');
     hint.textContent = '';
+
+    // 刷新所有 data-i18n 静态文字
+    applyLang();
 
     // 加载模型列表和参数（并行请求）
     const [statusRes, ollamaRes, paramsRes, modelsRes] = await Promise.all([
@@ -500,6 +503,13 @@ async function openSettingsModal() {
     const darkEl = document.getElementById('themeDark');
     if (lightEl) lightEl.classList.toggle('active', currentTheme === 'light');
     if (darkEl) darkEl.classList.toggle('active', currentTheme === 'dark');
+
+    // 通用设置：同步语言选中状态
+    const currentLang = getCurrentLang();
+    const zhEl = document.getElementById('langZh');
+    const enEl = document.getElementById('langEn');
+    if (zhEl) zhEl.classList.toggle('active', currentLang === 'zh');
+    if (enEl) enEl.classList.toggle('active', currentLang === 'en');
 
     modal.style.display = 'flex';
 
@@ -916,8 +926,15 @@ async function pollModelStatus() {
             const shortModel = (info.model || '').split('/').pop();
 
             dot.className = 'model-status-dot ' + info.status;
-            msg.textContent = info.message || '';
-            el.title = `${shortModel}\n${info.message}`;
+            // 用 i18n 翻译状态消息，回退到后端返回的原始消息
+            const STATUS_MSG = {
+                'checking': t('model.checking'),
+                'loading': t('model.loading'),
+                'ready': t('model.ready'),
+                'error': t('model.error'),
+            };
+            msg.textContent = STATUS_MSG[info.status] || info.message || '';
+            el.title = `${shortModel}\n${msg.textContent}`;
 
             if (info.status !== 'ready') allReady = false;
             if (info.status === 'loading' || info.status === 'checking') anyLoading = true;
@@ -928,15 +945,15 @@ async function pollModelStatus() {
         if (anyLoading) {
             dom.modelLoadStatus.style.display = 'inline-flex';
             dom.modelLoadDot.className = 'model-load-dot loading';
-            dom.modelLoadText.textContent = '模型加载中...';
+            dom.modelLoadText.textContent = t('model.loading.summary');
         } else if (anyError) {
             dom.modelLoadStatus.style.display = 'inline-flex';
             dom.modelLoadDot.className = 'model-load-dot error';
-            dom.modelLoadText.textContent = '模型加载异常';
+            dom.modelLoadText.textContent = t('model.error.summary');
         } else if (allReady) {
             dom.modelLoadStatus.style.display = 'inline-flex';
             dom.modelLoadDot.className = 'model-load-dot ready';
-            dom.modelLoadText.textContent = '模型已就绪';
+            dom.modelLoadText.textContent = t('model.ready.summary');
             _allModelsReady = true;
             // 3秒后淡出顶栏提示
             setTimeout(() => {
@@ -969,7 +986,7 @@ async function updateOcrModelStatus() {
             msg.textContent = ocrModel.split('/').pop(); // 只显示模型名短名
         } else {
             dot.style.background = 'var(--text-secondary)';
-            msg.textContent = '未启用';
+            msg.textContent = t('model.unconfigured');
         }
     } catch (e) {
         // 忽略
@@ -1309,7 +1326,7 @@ function addMessage(role, content, sources = [], createdAt = null) {
 
     const avatar = document.createElement('div');
     avatar.className = 'message-avatar';
-    avatar.textContent = role === 'user' ? '我' : 'AI';
+    avatar.textContent = role === 'user' ? t('chat.me') : t('chat.ai');
 
     const contentDiv = document.createElement('div');
     contentDiv.className = 'message-content';
@@ -1326,12 +1343,12 @@ function addMessage(role, content, sources = [], createdAt = null) {
         const sourcesDiv = document.createElement('div');
         sourcesDiv.className = 'sources';
         sourcesDiv.innerHTML = `
-            <div class="source-title">参考来源:</div>
+            <div class="source-title">${t('chat.sources')}</div>
             ${sources.map(s => `
                 <div class="source-item">
                     <span>#${s.index}</span>
                     <span>${escapeHtml(s.source)}</span>
-                    <span class="source-score">得分: ${s.score}</span>
+                    <span class="source-score">${t('chat.score')}${s.score}</span>
                 </div>
             `).join('')}
         `;
@@ -1367,13 +1384,13 @@ function addTypingIndicator() {
 
     const avatar = document.createElement('div');
     avatar.className = 'message-avatar';
-    avatar.textContent = 'AI';
+    avatar.textContent = t('chat.ai');
 
     const contentDiv = document.createElement('div');
     contentDiv.className = 'message-content';
     contentDiv.innerHTML = `
         <div class="typing-indicator">
-            <span class="typing-label">思考中</span>
+            <span class="typing-label">${t('chat.typing')}</span>
             <span></span><span></span><span></span>
         </div>
     `;
@@ -1393,7 +1410,7 @@ function addStreamingMessage() {
 
     const avatar = document.createElement('div');
     avatar.className = 'message-avatar';
-    avatar.textContent = 'AI';
+    avatar.textContent = t('chat.ai');
 
     const contentDiv = document.createElement('div');
     contentDiv.className = 'message-content';
@@ -1415,12 +1432,12 @@ function appendSources(contentDiv, sources) {
     const sourcesDiv = document.createElement('div');
     sourcesDiv.className = 'sources';
     sourcesDiv.innerHTML = `
-        <div class="source-title">参考来源:</div>
+        <div class="source-title">${t('chat.sources')}</div>
         ${sources.map(s => `
             <div class="source-item">
                 <span>#${s.index}</span>
                 <span>${escapeHtml(s.source)}</span>
-                <span class="source-score">得分: ${s.score}</span>
+                <span class="source-score">${t('chat.score')}${s.score}</span>
             </div>
         `).join('')}
     `;
@@ -1501,6 +1518,42 @@ function applyTheme(theme) {
 function initTheme() {
     const saved = loadGeneralSetting('theme', 'light');
     document.documentElement.setAttribute('data-theme', saved);
+}
+
+/**
+ * 切换语言并立即生效
+ */
+function applyLangChoice(lang) {
+    setLang(lang);
+    // 更新语言卡片 active 状态
+    const zhEl = document.getElementById('langZh');
+    const enEl = document.getElementById('langEn');
+    if (zhEl) zhEl.classList.toggle('active', lang === 'zh');
+    if (enEl) enEl.classList.toggle('active', lang === 'en');
+    // 示例问题按钮 data-q 也要跟着语言更新
+    const q1 = document.getElementById('exampleQ1');
+    const q2 = document.getElementById('exampleQ2');
+    const q3 = document.getElementById('exampleQ3');
+    if (q1) q1.dataset.q = t('welcome.q1');
+    if (q2) q2.dataset.q = t('welcome.q2');
+    if (q3) q3.dataset.q = t('welcome.q3');
+}
+
+/**
+ * 顶栏语言快速切换（中/英一键切换）
+ */
+function toggleLangQuick() {
+    const cur = getCurrentLang();
+    applyLangChoice(cur === 'zh' ? 'en' : 'zh');
+    _updateLangToggleBtn();
+}
+
+function _updateLangToggleBtn() {
+    const btn = document.getElementById('langToggleBtn');
+    if (!btn) return;
+    const cur = getCurrentLang();
+    btn.textContent = cur === 'zh' ? 'EN' : '中';
+    btn.title = cur === 'zh' ? 'Switch to English' : '切换为中文';
 }
 
 function formatFileSize(bytes) {
@@ -1625,3 +1678,36 @@ function showClearChatModal() {
         once: true
     });
 }
+
+// 语言切换时更新动态 placeholder
+document.addEventListener('langchange', () => {
+    _updateLangToggleBtn();
+    updateOcrModelStatus();
+    renderChatKbSelector(); // 刷新知识库下拉框
+    // 强制刷新一次模型状态文字
+    _allModelsReady = false;
+    pollModelStatus();
+    const qi = document.getElementById('questionInput');
+    if (qi) qi.placeholder = t('chat.placeholder');
+    // 刷新切分方式卡片文字（index.html 里的 radio cards）
+    const chunkNames = {
+        'fixed': 'chunk.fixed',
+        'recursive': 'chunk.recursive',
+        'markdown': 'chunk.markdown',
+        'semantic': 'chunk.semantic',
+    };
+    const chunkDescs = {
+        'fixed': 'chunk.fixed.desc',
+        'recursive': 'chunk.recursive.desc',
+        'markdown': 'chunk.markdown.desc',
+        'semantic': 'chunk.semantic.desc',
+    };
+    ['fixed', 'recursive', 'markdown', 'semantic'].forEach(function(v) {
+        const card = document.querySelector('input[name="chunkMethod"][value="' + v + '"]');
+        if (!card) return;
+        const nameEl = card.parentElement.querySelector('.chunk-method-name');
+        const descEl = card.parentElement.querySelector('.chunk-method-desc');
+        if (nameEl) nameEl.textContent = t(chunkNames[v]);
+        if (descEl) descEl.innerHTML = t(chunkDescs[v]).replace(/\n/g, '<br>');
+    });
+});

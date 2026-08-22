@@ -152,13 +152,22 @@ body {
 .btn-danger {
     background: var(--danger);
     color: white;
-    width: 100%;
     justify-content: center;
-    margin-top: 8px;
 }
 
 .btn-danger:hover {
     background: #dc2626;
+}
+
+.btn-secondary {
+    background: var(--primary);
+    color: white;
+    border: none;
+    justify-content: center;
+}
+
+.btn-secondary:hover {
+    background: var(--primary-dark);
 }
 
 .upload-hint {
@@ -1077,7 +1086,7 @@ body {
     background: var(--surface);
     border-radius: var(--radius);
     box-shadow: var(--shadow-lg);
-    padding: 28px 32px;
+    /*    padding: 28px 32px;*/
     width: 360px;
     max-width: 90vw;
     text-align: center;
@@ -1132,10 +1141,15 @@ body {
     gap: 12px;
     justify-content: flex-end;
     padding: 0 8px 12px 0;
+    align-items: stretch;
+    /* 让所有按钮等高 */
 }
 
 .modal-actions .btn {
     min-width: 90px;
+    margin-top: 0;
+    width: auto;
+    /* 覆盖 btn-primary 的 width:100%，让按钮内容决定宽度 */
 }
 
 .btn-secondary {
@@ -2314,9 +2328,9 @@ body {
 }
 
 .chunk-method-card {
-    display: flex;
-    align-items: flex-start;
-    gap: 10px;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 4px;
     padding: 10px 14px;
     border: 1.5px solid var(--border);
     border-radius: var(--radius-sm);
@@ -2348,6 +2362,9 @@ body {
     color: var(--text);
     display: block;
     margin-bottom: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .chunk-method-desc {
@@ -2457,6 +2474,9 @@ body {
     background: var(--surface);
     color: var(--text);
     font-size: 0.82rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .upload-chunk-num {
