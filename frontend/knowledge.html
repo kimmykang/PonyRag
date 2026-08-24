@@ -391,6 +391,96 @@
         document.addEventListener('DOMContentLoaded', () => applyLang());
     </script>
 
+    <!-- Chunk 浏览器 Modal -->
+    <div class="modal-overlay" id="chunkBrowserModal" style="display:none;">
+        <div class="modal" style="max-width: min(860px, 96vw); width: 96vw; max-height: 90vh; display:flex; flex-direction:column; text-align:left; padding:0; overflow:hidden;">
+
+            <!-- Header -->
+            <div class="modal-header" style="padding: 16px 20px; flex-shrink:0;">
+                <div>
+                    <h3 class="modal-title" style="margin:0;" id="chunkBrowserTitle" data-i18n="chunk.browser.title">Chunk 浏览器</h3>
+                    <p style="font-size:0.8rem; color:var(--text-secondary); margin:2px 0 0;" id="chunkBrowserSubtitle"></p>
+                </div>
+                <button class="icon-btn" onclick="closeChunkBrowser()">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+
+            <!-- 搜索框 -->
+            <div style="padding: 8px 20px 12px; flex-shrink:0; border-bottom: 1px solid var(--border);">
+                <input type="text" id="chunkSearchInput" placeholder="🔍 搜索 chunk 内容..." style="width:100%; padding:8px 14px; border:1.5px solid var(--border); border-radius:var(--radius-sm); background:var(--surface-2); color:var(--text); font-size:0.88rem;" oninput="filterChunks(this.value)">
+            </div>
+
+            <!-- Chunk 列表 -->
+            <div id="chunkList" style="flex:1; overflow-y:auto; padding: 0 20px 20px;">
+                <div class="empty-state">加载中...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Chunk 编辑 Modal -->
+    <div class="modal-overlay" id="chunkEditModal" style="display:none;">
+        <div class="modal" style="max-width: min(600px, 94vw); text-align:left; max-height: 90vh; overflow-y:auto;">
+            <div class="modal-header">
+                <h3 class="modal-title" data-i18n="chunk.edit.title">Edit Chunk</h3>
+                <button class="icon-btn" onclick="closeChunkEdit()">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body" style="padding: 16px 20px;">
+                <!-- Chunk 内容 -->
+                <div class="settings-field">
+                    <label style="font-size:0.85rem; font-weight:600;" data-i18n="chunk.edit.content">Chunk 内容</label>
+                    <textarea id="chunkEditContent" rows="8" style="width:100%; margin-top:6px; padding:10px; border:1.5px solid var(--border); border-radius:var(--radius-sm); background:var(--surface-2); color:var(--text); font-size:0.85rem; resize:vertical; font-family:inherit;"></textarea>
+                </div>
+
+                <!-- Type -->
+                <div class="settings-field" style="margin-top:12px;">
+                    <label style="font-size:0.85rem; font-weight:600;" data-i18n="chunk.edit.type">Type</label>
+                    <input type="text" id="chunkEditType" placeholder="e.g. Table, Text, Title" style="width:100%; margin-top:6px; padding:8px 12px; border:1.5px solid var(--border); border-radius:var(--radius-sm); background:var(--surface-2); color:var(--text); font-size:0.85rem;">
+                </div>
+
+                <!-- Tags -->
+                <div class="settings-field" style="margin-top:12px;">
+                    <label style="font-size:0.85rem; font-weight:600;" data-i18n="chunk.edit.tags">Tags</label><span style="font-size:0.75rem; color:var(--text-secondary);">（逗号分隔）</span></label>
+                    <input type="text" id="chunkEditTags" placeholder="e.g. important, faq, price" style="width:100%; margin-top:6px; padding:8px 12px; border:1.5px solid var(--border); border-radius:var(--radius-sm); background:var(--surface-2); color:var(--text); font-size:0.85rem;">
+                </div>
+
+                <!-- Keywords -->
+                <div class="settings-field" style="margin-top:12px;">
+                    <label style="font-size:0.85rem; font-weight:600;" data-i18n="chunk.edit.keywords">Keywords</label><span style="font-size:0.75rem; color:var(--text-secondary);">（逗号分隔）</span></label>
+                    <input type="text" id="chunkEditKeywords" placeholder="e.g. price, coverage, deductible" style="width:100%; margin-top:6px; padding:8px 12px; border:1.5px solid var(--border); border-radius:var(--radius-sm); background:var(--surface-2); color:var(--text); font-size:0.85rem;">
+                </div>
+
+                <!-- Enabled -->
+                <div class="settings-field" style="margin-top:12px;">
+                    <div class="toggle-row">
+                        <div>
+                            <div class="toggle-label" data-i18n="chunk.edit.enabled">Enabled</div>
+                            <div class="toggle-desc" style="font-size:0.78rem;" data-i18n="chunk.edit.enabledHint">禁用后该 chunk 不参与检索</div>
+                        </div>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="chunkEditEnabled" checked>
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                </div>
+
+                <p id="chunkEditHint" style="font-size:0.82rem; margin-top:10px;"></p>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="closeChunkEdit()" data-i18n="btn.cancel">Cancel</button>
+                <button class="btn btn-primary" id="chunkEditSaveBtn" onclick="saveChunkEdit()" data-i18n="btn.save">Save</button>
+            </div>
+        </div>
+    </div>
+
 </body>
 
 </html>

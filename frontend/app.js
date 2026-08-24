@@ -472,7 +472,14 @@ async function openSettingsModal() {
         setParamValue('rerankTopK', paramsRes.rerank_top_k || 5);
         setParamValue('chunkSize', paramsRes.chunk_size || 500);
         setParamValue('chunkOverlap', paramsRes.chunk_overlap || 50);
-        setParamValue('numCtx', paramsRes.num_ctx || 4096);
+        setParamValue('numCtx', Math.round((paramsRes.num_ctx || 131072) / 1024));
+        setParamValue('contextLimit', Math.round((paramsRes.context_limit || 20000) / 1000));
+        // thinking 模式开关
+        const thinking = paramsRes.thinking === true || paramsRes.thinking === 'true';
+        const thinkingOnEl = document.getElementById('thinkingOn');
+        const thinkingOffEl = document.getElementById('thinkingOff');
+        if (thinkingOnEl) thinkingOnEl.checked = thinking;
+        if (thinkingOffEl) thinkingOffEl.checked = !thinking;
         // 切分方式：选中对应 radio，并初始化分块参数显隐
         const method = paramsRes.chunk_method || 'recursive';
         const radioEl = document.querySelector(`input[name="chunkMethod"][value="${method}"]`);
@@ -495,7 +502,7 @@ async function openSettingsModal() {
 
     // 通用设置：读取流式输出开关状态
     const streamingToggle = document.getElementById('streamingToggle');
-    if (streamingToggle) streamingToggle.checked = loadGeneralSetting('streaming', false);
+    if (streamingToggle) streamingToggle.checked = loadGeneralSetting('streaming', true);
 
     // 通用设置：同步主题选中状态
     const currentTheme = loadGeneralSetting('theme', 'light');
@@ -542,7 +549,10 @@ async function openSettingsModal() {
         const rerankTopK = parseInt(document.getElementById('rerankTopKInput').value);
         const chunkSize = parseInt(document.getElementById('chunkSizeInput').value);
         const chunkOverlap = parseInt(document.getElementById('chunkOverlapInput').value);
-        const numCtx = parseInt(document.getElementById('numCtxInput').value);
+        const numCtx = parseInt(document.getElementById('numCtxInput').value) * 1024;
+        const contextLimit = parseInt(document.getElementById('contextLimitInput').value) * 1000;
+        const thinkingEl = document.querySelector('input[name="thinkingMode"]:checked');
+        const thinking = thinkingEl ? thinkingEl.value === 'true' : false;
         const chunkMethodEl = document.querySelector('input[name="chunkMethod"]:checked');
         const chunkMethod = chunkMethodEl ? chunkMethodEl.value : 'recursive';
 
@@ -568,6 +578,8 @@ async function openSettingsModal() {
                     chunk_size: chunkSize,
                     chunk_overlap: chunkOverlap,
                     num_ctx: numCtx,
+                    context_limit: contextLimit,
+                    thinking: thinking,
                     chunk_method: chunkMethod,
                 }),
             });
@@ -1183,7 +1195,7 @@ async function handleChatSubmit(e) {
     const typingEl = addTypingIndicator();
 
     // 根据通用设置决定使用流式还是非流式接口
-    const useStreaming = loadGeneralSetting('streaming', false);
+    const useStreaming = loadGeneralSetting('streaming', true);
 
     if (!useStreaming) {
         // ── 非流式：等待完整答案一次性显示 ────────────────────────
@@ -1338,13 +1350,14 @@ function addMessage(role, content, sources = [], createdAt = null) {
         contentDiv.innerHTML = renderMarkdown(content);
     }
 
-    // 引用来源（只有 AI 回复才有）
-    if (sources && sources.length > 0) {
+    // 引用来源（只有 AI 回复才有，过滤掉得分为0的扩展chunk）
+    const visibleSources = (sources || []).filter(s => s.score > 0);
+    if (visibleSources.length > 0) {
         const sourcesDiv = document.createElement('div');
         sourcesDiv.className = 'sources';
         sourcesDiv.innerHTML = `
             <div class="source-title">${t('chat.sources')}</div>
-            ${sources.map(s => `
+            ${visibleSources.map(s => `
                 <div class="source-item">
                     <span>#${s.index}</span>
                     <span>${escapeHtml(s.source)}</span>
@@ -1428,12 +1441,13 @@ function addStreamingMessage() {
 
 // 在消息气泡末尾追加参考来源
 function appendSources(contentDiv, sources) {
-    if (!sources || sources.length === 0) return;
+    const visibleSources = (sources || []).filter(s => s.score > 0);
+    if (!visibleSources.length) return;
     const sourcesDiv = document.createElement('div');
     sourcesDiv.className = 'sources';
     sourcesDiv.innerHTML = `
         <div class="source-title">${t('chat.sources')}</div>
-        ${sources.map(s => `
+        ${visibleSources.map(s => `
             <div class="source-item">
                 <span>#${s.index}</span>
                 <span>${escapeHtml(s.source)}</span>
@@ -1490,11 +1504,11 @@ function saveGeneralSetting(key, value) {
  * @param {'fixed'|'recursive'|'markdown'|'semantic'} method
  */
 function _updateChunkParamVisibility(method) {
-    const show = method === 'fixed' || method === 'recursive';
+    // 所有切分方式都显示 chunk_size/overlap（标题树/语义用于二次切分上限）
     const sizeField = document.getElementById('chunkSizeField');
     const overlapField = document.getElementById('chunkOverlapField');
-    if (sizeField) sizeField.style.display = show ? '' : 'none';
-    if (overlapField) overlapField.style.display = show ? '' : 'none';
+    if (sizeField) sizeField.style.display = '';
+    if (overlapField) overlapField.style.display = '';
 }
 
 // ── 主题管理 ────────────────────────────────────────────────
@@ -1570,8 +1584,54 @@ function formatFileSize(bytes) {
  */
 function renderMarkdown(text) {
     if (!text) return '';
+    try {
+        return _renderMarkdownImpl(text);
+    } catch (e) {
+        console.error('[renderMarkdown] error:', e);
+        // 降级：直接显示转义后的文本
+        return '<p>' + escapeHtml(text).replace(/\n/g, '<br>') + '</p>';
+    }
+}
+
+function _renderMarkdownImpl(text) {
+    if (!text) return '';
 
     let html = escapeHtml(text);
+
+    // 把 LLM 输出的字面量 <br>（经escapeHtml后变为&lt;br&gt;）
+    // 在表格外转为换行，在表格内保留为 <br>
+    // 先临时标记，表格解析时还原
+    html = html.replace(/&lt;br\s*\/?&gt;/gi, '\x00BR\x00');
+
+    // ── 表格（优先处理，在换行转 <br> 之前）──────────────────
+    html = html.replace(/((?:\|.+\|\n?)+)/g, function(block) {
+        const rows = block.trim().split('\n').filter(r => r.trim());
+        // 至少需要表头 + 分隔行才渲染为表格，否则原样返回（流式半截时保护）
+        if (rows.length < 2) return block;
+        const isSepRow = (r) => /^\|[\s\|\-:]+\|$/.test(r.trim());
+        // 第二行必须是分隔行，否则不是标准 Markdown 表格
+        if (!isSepRow(rows[1])) return block;
+        let tableHtml = '<div class="md-table-wrap"><table class="md-table"><thead><tr>';
+        const headers = rows[0].split('|').filter((_, i, a) => i > 0 && i < a.length - 1);
+        headers.forEach(h => {
+            tableHtml += `<th>${h.trim().replace(/\x00BR\x00/g, '<br>')}</th>`;
+        });
+        tableHtml += '</tr></thead><tbody>';
+        rows.slice(1).forEach(row => {
+            if (isSepRow(row)) return;
+            tableHtml += '<tr>';
+            const cells = row.split('|').filter((_, i, a) => i > 0 && i < a.length - 1);
+            cells.forEach(c => {
+                tableHtml += `<td>${c.trim().replace(/\x00BR\x00/g, '<br>')}</td>`;
+            });
+            tableHtml += '</tr>';
+        });
+        tableHtml += '</tbody></table></div>';
+        return tableHtml;
+    });
+
+    // 表格外的标记转为换行符
+    html = html.replace(/\x00BR\x00/g, '\n');
 
     // 行内代码
     html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
@@ -1594,8 +1654,12 @@ function renderMarkdown(text) {
     // 有序列表
     html = html.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
 
-    // 换行
+    // 换行：把非 HTML 标签内的 \n 转为 <br>
+    // 用简单替换，不用 lookbehind（兼容性更好）
     html = html.replace(/\n/g, '<br>');
+    // 清理表格标签前后多余的 <br>
+    html = html.replace(/<br>(<\/?(?:table|thead|tbody|tr|th|td|div)[^>]*>)/g, '$1');
+    html = html.replace(/(<\/?(?:table|thead|tbody|tr|th|td|div)[^>]*>)<br>/g, '$1');
 
     // 清理多余的 br
     html = html.replace(/<br><br>/g, '</p><p>');
@@ -1603,7 +1667,7 @@ function renderMarkdown(text) {
     html = html.replace(/<p><\/p>/g, '');
 
     return html;
-}
+} // end _renderMarkdownImpl
 
 // ============================================================
 // 聊天历史持久化

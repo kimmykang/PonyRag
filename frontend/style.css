@@ -2312,8 +2312,8 @@ body {
    ======================================== */
 
 .chunk-method-selector {
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
     gap: 8px;
     margin-top: 4px;
 }
@@ -2328,15 +2328,16 @@ body {
 }
 
 .chunk-method-card {
-    display: grid;
-    grid-template-columns: 1fr;
-    gap: 4px;
+    display: flex;
+    flex-direction: column;
     padding: 10px 14px;
     border: 1.5px solid var(--border);
     border-radius: var(--radius-sm);
     background: var(--surface);
     transition: all 0.18s;
     cursor: pointer;
+    height: 100%;
+    box-sizing: border-box;
 }
 
 .chunk-method-card:hover {
@@ -2564,4 +2565,63 @@ body {
 .chunk-tag-clickable:hover {
     opacity: 0.85;
     box-shadow: 0 0 0 2px var(--primary);
+}
+
+/* ========================================
+   消息内嵌 Markdown 表格
+   ======================================== */
+
+.md-table-wrap {
+    overflow-x: auto;
+    margin: 10px 0;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+}
+
+.md-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    min-width: 400px;
+}
+
+.md-table th {
+    background: var(--surface-elevated, rgba(99, 102, 241, 0.1));
+    color: var(--primary);
+    font-weight: 600;
+    padding: 8px 12px;
+    text-align: left;
+    border-bottom: 2px solid var(--border);
+    white-space: nowrap;
+}
+
+.md-table td {
+    padding: 7px 12px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+    line-height: 1.5;
+}
+
+.md-table tr:last-child td {
+    border-bottom: none;
+}
+
+.md-table tr:nth-child(even) td {
+    background: rgba(0, 0, 0, 0.02);
+}
+
+.md-table tr:hover td {
+    background: rgba(99, 102, 241, 0.05);
+}
+
+[data-theme="dark"] .md-table th {
+    background: rgba(99, 102, 241, 0.15);
+}
+
+[data-theme="dark"] .md-table tr:nth-child(even) td {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+[data-theme="dark"] .md-table tr:hover td {
+    background: rgba(99, 102, 241, 0.08);
 }

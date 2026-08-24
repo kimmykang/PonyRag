@@ -102,6 +102,12 @@ const LANGS = {
         'params.generation': '🧠 生成参数',
         'params.numCtx': '上下文窗口 (num_ctx)',
         'params.numCtxHint': 'LLM 可处理的最大 token 数，越大越慢',
+        'params.contextLimit': '参考知识字符数 (context_limit)',
+        'params.contextLimitHint': '送入 LLM 的最大参考知识字符数，越大越慢',
+        'params.thinking': '模型思考模式 (thinking)',
+        'params.thinkingHint': '开启后模型先推理再回答，质量更高但速度慢；关闭则直接输出答案',
+        'params.thinkingOn': '开启',
+        'params.thinkingOff': '关闭',
 
         'chunk.fixed': '✂️ 固定切分',
         'chunk.fixed.desc': '严格按 CHUNK_SIZE 字符数切，块大小最均匀。\n适合：格式混乱的纯文本、日志、数据导出',
@@ -212,6 +218,24 @@ const LANGS = {
 
         'upload.title': '上传完成',
         'upload.failed': '以下文档未能成功上传：',
+
+        // Chunk 浏览器
+        'chunk.browser.title': 'Chunk 浏览器',
+        'chunk.browser.empty': '该文档在向量库中暂无 chunk',
+        'chunk.browser.edit': '编辑',
+        'chunk.browser.disabled': '已禁用',
+        'chunk.browser.viewBtn': '查看/编辑 Chunk',
+        'chunk.edit.title': '编辑 Chunk',
+        'chunk.edit.content': 'Chunk 内容',
+        'chunk.edit.type': 'Type',
+        'chunk.edit.tags': 'Tags',
+        'chunk.edit.tagsHint': '（逗号分隔）',
+        'chunk.edit.keywords': 'Keywords',
+        'chunk.edit.enabled': 'Enabled',
+        'chunk.edit.enabledHint': '禁用后该 chunk 不参与检索',
+        'chunk.edit.saving': '保存中，正在重新生成向量...',
+        'chunk.edit.saved': '✅ 保存成功，向量已更新',
+        'chunk.edit.emptyError': 'Chunk 内容不能为空',
     },
 
     en: {
@@ -312,6 +336,12 @@ const LANGS = {
         'params.generation': '🧠 Generation',
         'params.numCtx': 'Context window (num_ctx)',
         'params.numCtxHint': 'Maximum tokens the LLM can process. Larger = slower',
+        'params.contextLimit': 'Reference context size (context_limit)',
+        'params.contextLimitHint': 'Max characters of reference knowledge sent to LLM. Larger = slower',
+        'params.thinking': 'Thinking mode (thinking)',
+        'params.thinkingHint': 'When on, model reasons before answering (better quality, slower). When off, answers directly.',
+        'params.thinkingOn': 'On',
+        'params.thinkingOff': 'Off',
 
         'chunk.fixed': '✂️ Fixed',
         'chunk.fixed.desc': 'Splits strictly by character count.\nBest for: plain text, logs, data exports',
@@ -422,6 +452,24 @@ const LANGS = {
 
         'upload.title': 'Upload Complete',
         'upload.failed': 'The following documents failed to upload:',
+
+        // Chunk Browser
+        'chunk.browser.title': 'Chunk Browser',
+        'chunk.browser.empty': 'No chunks found in vector store for this document',
+        'chunk.browser.edit': 'Edit',
+        'chunk.browser.disabled': 'Disabled',
+        'chunk.browser.viewBtn': 'View/Edit Chunks',
+        'chunk.edit.title': 'Edit Chunk',
+        'chunk.edit.content': 'Chunk content',
+        'chunk.edit.type': 'Type',
+        'chunk.edit.tags': 'Tags',
+        'chunk.edit.tagsHint': '(comma separated)',
+        'chunk.edit.keywords': 'Keywords',
+        'chunk.edit.enabled': 'Enabled',
+        'chunk.edit.enabledHint': 'Disabled chunks are excluded from retrieval',
+        'chunk.edit.saving': 'Saving, re-generating embedding...',
+        'chunk.edit.saved': '✅ Saved, embedding updated',
+        'chunk.edit.emptyError': 'Chunk content cannot be empty',
     },
 };
 

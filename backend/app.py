@@ -1174,6 +1174,11 @@ async def chat(req: ChatRequest):
             col_count = engine.vector_store.client.get_collection(kb_id).count() if kb_id in [c.name for c in engine.vector_store.client.list_collections()] else 0
             docs = engine.vector_store.search(req.question, collection_name=kb_id, top_k=_cfg.TOP_K)
             print(f"[Chat] 知识库 {kb_id}: 集合条目={col_count}, 检索到={len(docs)} 条, TOP_K={_cfg.TOP_K}")
+            import re as _re2
+            for _i, _d in enumerate(docs):
+                _m = _re2.match(r'^\[([^\]]+)\]', _d.page_content.strip())
+                _t = _m.group(1) if _m else _d.page_content[:20].replace('\n', ' ')
+                print(f"  [{_i}] sim={_d.metadata.get('similarity_score',0):.4f} title={_t!r:.40}")
             all_docs.extend(docs)
         except Exception as e:
             err_msg = str(e)
@@ -1203,6 +1208,7 @@ async def chat(req: ChatRequest):
             question=req.question,
             documents=all_docs,
             chat_history=req.chat_history,
+            collection_names=kb_ids,
         )
 
     session_id = req.session_id or str(uuid.uuid4())
@@ -1291,6 +1297,7 @@ async def chat_stream(req: ChatRequest):
                     question=req.question,
                     documents=all_docs,
                     chat_history=req.chat_history,
+                    collection_names=kb_ids,
                 ):
                     loop.call_soon_threadsafe(queue.put_nowait, event)
             except Exception as e:
@@ -1843,6 +1850,76 @@ async def rechunk_document(req: RechunkRequest):
     }
 
 
+# ──────────────────────────────────────────────────────────────
+# Chunk 浏览与编辑 API
+# ──────────────────────────────────────────────────────────────
+
+@app.get("/api/document/chunks")
+async def get_document_chunks(filename: str, kb_id: str = "knowledge_base"):
+    """
+    获取指定文档在向量库中的所有 chunk 列表。
+
+    Query params:
+      filename: 文档显示名（如 report.pdf 或 report.md）
+      kb_id:    知识库 ID
+
+    Returns:
+      { "chunks": [ { id, content, metadata, index } ], "total": int }
+    """
+    kb = get_kb(kb_id)
+    if not kb:
+        raise HTTPException(status_code=404, detail=f"知识库 {kb_id} 不存在")
+
+    # 统一用 .md 文件名作为 source 标识
+    stem = Path(filename).stem
+    md_filename = stem + ".md"
+
+    engine = get_rag_engine(kb_id)
+    chunks = engine.vector_store.get_chunks_by_source(md_filename, kb_id)
+
+    return {"chunks": chunks, "total": len(chunks), "source": md_filename}
+
+
+class ChunkUpdateRequest(BaseModel):
+    content:  str            # 新的 chunk 文本
+    metadata: dict = {}      # 新的元数据（可含 type/tags/keywords/enabled 等字段）
+    kb_id:    str = "knowledge_base"
+
+
+@app.put("/api/document/chunks/{chunk_id}")
+async def update_chunk(chunk_id: str, req: ChunkUpdateRequest):
+    """
+    更新指定 chunk 的文本内容和元数据，重新生成向量写回 ChromaDB。
+
+    Path param:
+      chunk_id: ChromaDB 中的 chunk ID（MD5 hash）
+
+    Body:
+      content:  新文本
+      metadata: 新元数据（type, tags, keywords, enabled 等）
+      kb_id:    知识库 ID
+    """
+    kb = get_kb(req.kb_id)
+    if not kb:
+        raise HTTPException(status_code=404, detail=f"知识库 {req.kb_id} 不存在")
+
+    if not req.content.strip():
+        raise HTTPException(status_code=400, detail="chunk 内容不能为空")
+
+    engine = get_rag_engine(req.kb_id)
+    ok = engine.vector_store.update_chunk(
+        chunk_id=chunk_id,
+        new_content=req.content,
+        new_metadata=req.metadata,
+        collection_name=req.kb_id,
+    )
+
+    if not ok:
+        raise HTTPException(status_code=500, detail="chunk 更新失败")
+
+    return {"status": "success", "message": "chunk 已更新", "chunk_id": chunk_id}
+
+
 @app.get("/api/config/rag-params")
 async def get_rag_params():
     """
@@ -1854,7 +1931,9 @@ async def get_rag_params():
         "rerank_top_k": _cfg.RERANK_TOP_K,
         "chunk_size": _cfg.CHUNK_SIZE,
         "chunk_overlap": _cfg.CHUNK_OVERLAP,
-        "num_ctx": 4096,  # 从 rag_engine 读取，这里用默认值
+        "num_ctx": 131072,
+        "context_limit": getattr(_cfg, "CONTEXT_LIMIT", 20000),
+        "thinking": getattr(_cfg, "THINKING", False),
         "chunk_method": getattr(_cfg, "CHUNK_METHOD", "recursive"),
     }
 
@@ -1865,6 +1944,8 @@ class RagParamsRequest(BaseModel):
     chunk_size: int
     chunk_overlap: int
     num_ctx: int
+    context_limit: int = 20000
+    thinking: bool = False
     chunk_method: str = "recursive"
 
 
@@ -1882,8 +1963,10 @@ async def save_rag_params(req: RagParamsRequest):
         raise HTTPException(status_code=400, detail="CHUNK_SIZE 范围: 100~2000")
     if req.chunk_overlap < 0 or req.chunk_overlap >= req.chunk_size:
         raise HTTPException(status_code=400, detail="CHUNK_OVERLAP 必须小于 CHUNK_SIZE")
-    if req.num_ctx < 512 or req.num_ctx > 32768:
-        raise HTTPException(status_code=400, detail="num_ctx 范围: 512~32768")
+    if req.num_ctx < 512 or req.num_ctx > 524288:
+        raise HTTPException(status_code=400, detail="num_ctx 范围: 512~524288")
+    if req.context_limit < 1000 or req.context_limit > 200000:
+        raise HTTPException(status_code=400, detail="context_limit 范围: 1000~200000")
     if req.chunk_method not in ("fixed", "recursive", "markdown", "semantic"):
         raise HTTPException(status_code=400, detail="chunk_method 必须为 fixed/recursive/markdown/semantic")
 
@@ -1895,6 +1978,8 @@ async def save_rag_params(req: RagParamsRequest):
         "CHUNK_SIZE": str(req.chunk_size),
         "CHUNK_OVERLAP": str(req.chunk_overlap),
         "CHUNK_METHOD": req.chunk_method,
+        "CONTEXT_LIMIT": str(req.context_limit),
+        "THINKING": str(req.thinking).lower(),
     })
 
     # 运行时立即生效
@@ -1904,10 +1989,12 @@ async def save_rag_params(req: RagParamsRequest):
     _cfg.CHUNK_SIZE = req.chunk_size
     _cfg.CHUNK_OVERLAP = req.chunk_overlap
     _cfg.CHUNK_METHOD = req.chunk_method
+    _cfg.CONTEXT_LIMIT = req.context_limit
+    _cfg.THINKING = req.thinking
 
     # num_ctx 需要重建 RAG 引擎才能生效
     chunk_size_changed = req.chunk_size != _cfg.CHUNK_SIZE
-    if req.num_ctx != 4096 or chunk_size_changed:
+    if req.num_ctx != 131072 or chunk_size_changed:
         # 更新所有引擎的 LLM num_ctx
         with _rag_engines_lock:
             for engine in _rag_engines.values():

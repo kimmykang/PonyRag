@@ -440,8 +440,40 @@
                             <span class="params-hint" data-i18n="params.numCtxHint">LLM 可处理的最大 token 数，越大越慢</span>
                         </label>
                         <div class="params-input-row">
-                            <input type="range" id="numCtxRange" min="512" max="8192" step="512" value="4096" class="params-range">
-                            <input type="number" id="numCtxInput" min="512" max="8192" step="512" value="4096" class="params-number">
+                            <input type="range" id="numCtxRange" min="1" max="512" step="1" value="128" class="params-range">
+                            <div style="display:flex;align-items:center;gap:4px;">
+                                <input type="number" id="numCtxInput" min="1" max="512" step="1" value="128" class="params-number" style="width:70px;">
+                                <span style="color:var(--text-secondary);font-size:13px;">K</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="settings-field">
+                        <label>
+                            <span data-i18n="params.contextLimit">参考知识字符数 (context_limit)</span>
+                            <span class="params-hint" data-i18n="params.contextLimitHint">送入 LLM 的最大参考知识字符数，越大越慢</span>
+                        </label>
+                        <div class="params-input-row">
+                            <input type="range" id="contextLimitRange" min="1" max="200" step="1" value="20" class="params-range">
+                            <div style="display:flex;align-items:center;gap:4px;">
+                                <input type="number" id="contextLimitInput" min="1" max="200" step="1" value="20" class="params-number" style="width:70px;">
+                                <span style="color:var(--text-secondary);font-size:13px;">K</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="settings-field">
+                        <label>
+                            <span data-i18n="params.thinking">模型思考模式 (thinking)</span>
+                            <span class="params-hint" data-i18n="params.thinkingHint">开启后模型先推理再回答，质量更高但速度慢；关闭则直接输出答案</span>
+                        </label>
+                        <div class="params-input-row" style="gap:12px;">
+                            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                                <input type="radio" name="thinkingMode" id="thinkingOn" value="true">
+                                <span data-i18n="params.thinkingOn">开启</span>
+                            </label>
+                            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                                <input type="radio" name="thinkingMode" id="thinkingOff" value="false" checked>
+                                <span data-i18n="params.thinkingOff">关闭</span>
+                            </label>
                         </div>
                     </div>
                 </div>

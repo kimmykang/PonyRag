@@ -275,7 +275,7 @@ def _chunk_by_markdown_headers(texts: List[str], chunk_size: int = None, chunk_o
     ]
     md_splitter = MarkdownHeaderTextSplitter(
         headers_to_split_on=headers_to_split,
-        strip_headers=False,
+        strip_headers=True,
     )
 
     secondary = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
@@ -294,7 +294,19 @@ def _chunk_by_markdown_headers(texts: List[str], chunk_size: int = None, chunk_o
             if not content:
                 continue
             full_chunk = f"[{title_path}]\n{content}" if title_path else content
-            chunks.extend(secondary.split_text(full_chunk))
+            sub_chunks = secondary.split_text(full_chunk)
+            # 二次切分后，除第一块外后续子块不含标题前缀，需补回
+            # 使得每个 chunk 都能独立理解其所属章节
+            prefix = f"[{title_path}]\n" if title_path else ""
+            for j, sub in enumerate(sub_chunks):
+                if j == 0 or not prefix:
+                    chunks.append(sub)
+                else:
+                    # 避免重复添加（极端情况下 secondary 可能保留了前缀）
+                    if not sub.startswith(prefix):
+                        chunks.append(prefix + sub)
+                    else:
+                        chunks.append(sub)
 
     if not chunks:
         print("[Chunker] markdown 模式未找到标题，降级到 recursive")
@@ -312,9 +324,10 @@ def _chunk_by_semantic(texts: List[str], chunk_size: int = None, chunk_overlap: 
     _overlap = chunk_overlap if chunk_overlap is not None else CHUNK_OVERLAP
 
     # ── 句子分割 ────────────────────────────────────────────────
+    # 按中英文句末标点切句；空行（段落分隔）也作为切分点，但单个换行不切（保留列表/表格行完整性）
     all_sentences: List[str] = []
     for text in texts:
-        sents = re.split(r'(?<=[。！？\.\!\?])\s*|\n+', text)
+        sents = re.split(r'(?<=[。！？\.\!\?])\s*|\n{2,}', text)
         all_sentences.extend([s.strip() for s in sents if s.strip()])
 
     if not all_sentences:
@@ -362,13 +375,13 @@ def _chunk_by_semantic(texts: List[str], chunk_size: int = None, chunk_overlap: 
     for i in range(1, len(all_sentences)):
         sim = _cosine(embeddings[i - 1], embeddings[i])
         if sim < THRESHOLD:
-            segments.append(" ".join(current))
+            segments.append("".join(current))
             current = [all_sentences[i]]
         else:
             current.append(all_sentences[i])
 
     if current:
-        segments.append(" ".join(current))
+        segments.append("".join(current))
 
     # ── 二次截断：超过 _size 的段落切小 ──────────────────
     secondary = RecursiveCharacterTextSplitter.from_tiktoken_encoder(

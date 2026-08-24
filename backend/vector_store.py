@@ -267,6 +267,65 @@ class VectorStoreManager:
 
         return documents
 
+    def get_chunks_by_source(self, source: str, collection_name: str = "knowledge_base") -> List[dict]:
+        """
+        获取指定文档的所有 chunk 详情，用于前端浏览和编辑。
+
+        Returns:
+            list of dict，每项包含：id, content, metadata, index（序号）
+        """
+        try:
+            col = self._get_or_create_collection(collection_name)
+            result = col.get(
+                where={"source": source},
+                include=["documents", "metadatas"],
+            )
+            chunks = []
+            ids = result.get("ids", [])
+            docs = result.get("documents", [])
+            metas = result.get("metadatas", [])
+            for i, (cid, doc, meta) in enumerate(zip(ids, docs, metas)):
+                chunks.append({
+                    "id":       cid,
+                    "content":  doc,
+                    "metadata": meta or {},
+                    "index":    i,
+                })
+            # 按 index 排序（如 meta 里有 chunk_index 则用它）
+            chunks.sort(key=lambda x: x["metadata"].get("chunk_index", x["index"]))
+            return chunks
+        except Exception as e:
+            print(f"[VectorStore] get_chunks_by_source error: {e}")
+            return []
+
+    def update_chunk(self, chunk_id: str, new_content: str, new_metadata: dict,
+                     collection_name: str = "knowledge_base") -> bool:
+        """
+        更新指定 chunk 的文本内容和元数据，同时重新生成向量。
+
+        流程：
+          1. 用新内容重新生成 embedding
+          2. 调用 ChromaDB update() 同步更新文本、向量、元数据
+
+        Returns:
+            True 表示成功
+        """
+        try:
+            col = self._get_or_create_collection(collection_name)
+            # 重新生成向量
+            new_vec = self.embeddings.embed_documents([new_content])[0]
+            col.update(
+                ids=[chunk_id],
+                documents=[new_content],
+                embeddings=[new_vec],
+                metadatas=[new_metadata],
+            )
+            print(f"[VectorStore] chunk 已更新: {chunk_id}")
+            return True
+        except Exception as e:
+            print(f"[VectorStore] update_chunk error: {e}")
+            return False
+
     def delete_by_source(self, source: str, collection_name: str = "knowledge_base") -> int:
         """
         删除所有来自指定文档的向量块。

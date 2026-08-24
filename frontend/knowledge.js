@@ -1083,7 +1083,8 @@ function _updateUploadChunkPanel() {
 
     if (badge) badge.textContent = METHOD_NAMES[method] || method;
 
-    const showSize = method === '' || method === 'fixed' || method === 'recursive';
+    // 所有切分方式都允许设置 chunk_size（标题树/语义用于二次切分上限）
+    const showSize = true;
     if (sizeRow) sizeRow.style.display = showSize ? '' : 'none';
     if (overRow) overRow.style.display = showSize ? '' : 'none';
 }
@@ -1114,7 +1115,8 @@ function closeRechunkModal() {
 
 function updateRechunkSizeVisibility() {
     const method = document.getElementById('rechunkMethod').value;
-    const show = method === 'fixed' || method === 'recursive';
+    // 所有切分方式都允许设置 chunk_size（标题树/语义用于二次切分上限）
+    const show = method !== '';
     document.getElementById('rechunkSizeFields').style.display = show ? '' : 'none';
 }
 
@@ -1373,7 +1375,15 @@ function renderDocuments() {
                     }
                 </td>
                 <td class="doc-time-cell">${doc.upload_time || t('unknown')}</td>
-                <td style="text-align: center;">
+                <td style="text-align: center; white-space: nowrap;">
+                    <button class="icon-btn" onclick="window.openChunkBrowser('${safeName}', '${state.currentDocsKbId || 'knowledge_base'}')" title="${t('chunk.browser.viewBtn')}" style="margin-right:2px;">
+                        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="3" y="3" width="7" height="7"></rect>
+                            <rect x="14" y="3" width="7" height="7"></rect>
+                            <rect x="3" y="14" width="7" height="7"></rect>
+                            <rect x="14" y="14" width="7" height="7"></rect>
+                        </svg>
+                    </button>
                     <button class="icon-btn doc-delete-btn" onclick="window.deleteSingleDocument('${safeName}')" title="${t('btn.delete')}">
                         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
                             <polyline points="3 6 5 6 21 6"></polyline>
@@ -1398,3 +1408,207 @@ document.addEventListener('langchange', function() {
     refreshChunkMethodSelects();
     if (state.currentDocsKbId) renderDocuments();
 });
+
+// ── Chunk 浏览器 ──────────────────────────────────────────────
+
+var _chunkBrowserKbId = null;
+var _chunkBrowserFilename = null;
+var _chunkEditId = null;
+var _allChunks = [];
+
+/**
+ * 打开 Chunk 浏览器：加载该文档的所有 chunk
+ */
+window.openChunkBrowser = async function(filename, kbId) {
+    _chunkBrowserKbId = kbId || state.currentDocsKbId || 'knowledge_base';
+    _chunkBrowserFilename = filename;
+
+    document.getElementById('chunkBrowserTitle').textContent = t('chunk.browser.title');
+    document.getElementById('chunkBrowserSubtitle').textContent = filename;
+    document.getElementById('chunkList').innerHTML = '<div class="empty-state">' + t('kb.loading') + '</div>';
+    document.getElementById('chunkBrowserModal').style.display = 'flex';
+
+    try {
+        const res = await fetch(
+            API_BASE + '/api/document/chunks?filename=' + encodeURIComponent(filename) +
+            '&kb_id=' + encodeURIComponent(_chunkBrowserKbId)
+        );
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || '加载失败');
+
+        _allChunks = data.chunks || [];
+        renderChunkList(_allChunks);
+    } catch (e) {
+        document.getElementById('chunkList').innerHTML =
+            '<div class="empty-state" style="color:var(--danger);">加载失败: ' + e.message + '</div>';
+    }
+};
+
+function closeChunkBrowser() {
+    document.getElementById('chunkBrowserModal').style.display = 'none';
+    var inp = document.getElementById('chunkSearchInput');
+    if (inp) inp.value = '';
+    _allChunks = [];
+}
+
+function filterChunks(query) {
+    if (!query.trim()) {
+        renderChunkList(_allChunks);
+        return;
+    }
+    var q = query.toLowerCase();
+    var filtered = _allChunks.filter(function(c) {
+        var meta = c.metadata || {};
+        return (c.content || '').toLowerCase().includes(q) ||
+            (meta.tags || '').toLowerCase().includes(q) ||
+            (meta.type || '').toLowerCase().includes(q) ||
+            (meta.keywords || '').toLowerCase().includes(q);
+    });
+    renderChunkList(filtered);
+}
+
+function renderChunkList(chunks) {
+    var list = document.getElementById('chunkList');
+    if (chunks.length === 0) {
+        list.innerHTML = '<div class="empty-state">' + t('chunk.browser.empty') + '</div>';
+        return;
+    }
+
+    var html = chunks.map(function(chunk, i) {
+        var meta = chunk.metadata || {};
+        var tags = meta.tags ? meta.tags.split(',').map(function(t) {
+            return t.trim();
+        }).filter(Boolean) : [];
+        var type = meta.type || '';
+        var enabled = meta.enabled !== false;
+        var preview = (chunk.content || '').slice(0, 200).replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        if (chunk.content && chunk.content.length > 200) preview += '...';
+
+        return '<div class="chunk-browser-item" id="chunk-item-' + i + '" style="' +
+            'border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px 14px; ' +
+            'margin-bottom: 10px; background: var(--surface); ' +
+            (enabled ? '' : 'opacity:0.5;') +
+            '">' +
+            '<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">' +
+            '<div style="flex:1; min-width:0;">' +
+            '<div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:6px;">' +
+            '<span style="font-size:0.72rem; background:var(--primary); color:#fff; padding:1px 7px; border-radius:10px;">#' + (i + 1) + '</span>' +
+            (type ? '<span style="font-size:0.72rem; background:var(--surface-2); color:var(--text-secondary); padding:1px 7px; border-radius:10px; border:1px solid var(--border);">' + escapeHtml(type) + '</span>' : '') +
+            tags.map(function(tag) {
+                return '<span style="font-size:0.72rem; background:rgba(99,102,241,0.12); color:var(--primary); padding:1px 7px; border-radius:10px;">' + escapeHtml(tag) + '</span>';
+            }).join('') +
+            (!enabled ? '<span style="font-size:0.72rem; background:var(--danger); color:#fff; padding:1px 7px; border-radius:10px;">' + t('chunk.browser.disabled') + '</span>' : '') +
+            '</div>' +
+            '<p style="font-size:0.82rem; color:var(--text-secondary); line-height:1.5; margin:0; word-break:break-word; white-space:pre-wrap;">' + preview + '</p>' +
+            '</div>' +
+            '<button class="btn btn-secondary" style="flex-shrink:0; font-size:0.78rem; padding:4px 12px;" onclick="openChunkEditById(\'' + chunk.id + '\')">' + t('chunk.browser.edit') + '</button>' +
+            '</div>' +
+            '</div>';
+    }).join('');
+
+    list.innerHTML = html;
+}
+
+// ── Chunk 编辑 ───────────────────────────────────────────────
+
+function openChunkEdit(index) {
+    var chunk = _allChunks[index];
+    if (!chunk) return;
+    _openChunkEditWithChunk(chunk);
+}
+
+function openChunkEditById(chunkId) {
+    var chunk = _allChunks.find(function(c) {
+        return c.id === chunkId;
+    });
+    if (!chunk) return;
+    _openChunkEditWithChunk(chunk);
+}
+
+function _openChunkEditWithChunk(chunk) {
+    _chunkEditId = chunk.id;
+    var meta = chunk.metadata || {};
+    document.getElementById('chunkEditContent').value = chunk.content || '';
+    document.getElementById('chunkEditType').value = meta.type || '';
+    document.getElementById('chunkEditTags').value = meta.tags || '';
+    document.getElementById('chunkEditKeywords').value = meta.keywords || '';
+    document.getElementById('chunkEditEnabled').checked = meta.enabled !== false;
+    document.getElementById('chunkEditHint').textContent = '';
+    document.getElementById('chunkEditSaveBtn').disabled = false;
+    document.getElementById('chunkEditModal').style.display = 'flex';
+}
+
+function closeChunkEdit() {
+    document.getElementById('chunkEditModal').style.display = 'none';
+    _chunkEditId = null;
+}
+
+async function saveChunkEdit() {
+    if (!_chunkEditId) return;
+
+    var content = document.getElementById('chunkEditContent').value.trim();
+    var type = document.getElementById('chunkEditType').value.trim();
+    var tags = document.getElementById('chunkEditTags').value.trim();
+    var keywords = document.getElementById('chunkEditKeywords').value.trim();
+    var enabled = document.getElementById('chunkEditEnabled').checked;
+    var hint = document.getElementById('chunkEditHint');
+    var btn = document.getElementById('chunkEditSaveBtn');
+
+    if (!content) {
+        hint.style.color = 'var(--danger)';
+        hint.textContent = t('chunk.edit.emptyError');
+        return;
+    }
+
+    hint.style.color = 'var(--text-secondary)';
+    hint.textContent = t('chunk.edit.saving');
+    btn.disabled = true;
+
+    // 找到原始 metadata，保留 source 等字段
+    var origChunk = _allChunks.find(function(c) {
+        return c.id === _chunkEditId;
+    });
+    var origMeta = (origChunk && origChunk.metadata) ? Object.assign({}, origChunk.metadata) : {};
+    var newMeta = Object.assign(origMeta, {
+        type: type,
+        tags: tags,
+        keywords: keywords,
+        enabled: enabled,
+    });
+
+    try {
+        var res = await fetch(API_BASE + '/api/document/chunks/' + encodeURIComponent(_chunkEditId), {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                content: content,
+                metadata: newMeta,
+                kb_id: _chunkBrowserKbId,
+            }),
+        });
+        var data = await res.json();
+        if (res.ok) {
+            hint.style.color = 'var(--success)';
+            hint.textContent = t('chunk.edit.saved');
+            // 更新本地缓存
+            if (origChunk) {
+                origChunk.content = content;
+                origChunk.metadata = newMeta;
+            }
+            setTimeout(function() {
+                closeChunkEdit();
+                renderChunkList(_allChunks);
+            }, 800);
+        } else {
+            hint.style.color = 'var(--danger)';
+            hint.textContent = '失败: ' + (data.detail || data.message);
+            btn.disabled = false;
+        }
+    } catch (e) {
+        hint.style.color = 'var(--danger)';
+        hint.textContent = '请求失败: ' + e.message;
+        btn.disabled = false;
+    }
+}

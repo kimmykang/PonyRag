@@ -78,6 +78,12 @@ CHUNK_OVERLAP: int = int(os.getenv("CHUNK_OVERLAP", "50"))
 #   semantic   — 语义相似度切分（用 embedding 判断段落边界，适合叙事型文档）
 CHUNK_METHOD: str = os.getenv("CHUNK_METHOD", "recursive")
 
+# 送入 LLM 的最大参考知识字符数
+CONTEXT_LIMIT: int = int(os.getenv("CONTEXT_LIMIT", "20000"))
+
+# 模型思考模式：True 开启 thinking，False 关闭（默认关闭）
+THINKING: bool = os.getenv("THINKING", "false").lower() == "true"
+
 # ──────────────────────────────────────────────────────────────
 # 初始化：确保必要目录存在
 # ──────────────────────────────────────────────────────────────

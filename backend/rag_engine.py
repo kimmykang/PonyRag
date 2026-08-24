@@ -27,6 +27,79 @@ from config import (
 from vector_store import VectorStoreManager
 
 
+def _maybe_no_think(prompt: str) -> str:
+    """如果 config.THINKING 为 False，在 prompt 前加 /no_think 指令禁用思考模式"""
+    try:
+        from config import THINKING
+        if not THINKING:
+            return "/no_think\n" + prompt
+    except Exception:
+        pass
+    return prompt
+
+
+def _build_context(docs: List[Document], char_limit: int = None):
+    """
+    从文档列表构建 context 字符串和 sources 列表。
+    char_limit 默认从 config.CONTEXT_LIMIT 读取。
+    """
+    from config import CONTEXT_LIMIT
+    if char_limit is None:
+        char_limit = CONTEXT_LIMIT
+    context_parts = []
+    sources = []
+    total_chars = 0
+
+    for i, doc in enumerate(docs):
+        content = doc.page_content
+        if total_chars + len(content) > char_limit:
+            continue  # 超限跳过，不中断（后面可能有更短的 chunk）
+        context_parts.append(content)
+        total_chars += len(content)
+        source_info = doc.metadata.get("source", "unknown")
+        sources.append({
+            "index":  i + 1,
+            "source": source_info,
+            "score":  round(doc.metadata.get("rerank_score", doc.metadata.get("similarity_score", 0)), 4),
+        })
+
+    context = "\n\n".join(context_parts)
+    print(f"[RAG] 最终上下文: {len(sources)} 个chunk, {total_chars} 字符")
+    return context, sources
+
+
+def _build_rag_prompt(context: str, question: str) -> str:
+    """
+    构建 RAG prompt，针对列举型问题强调完整输出。
+    
+    列举型关键词：有哪些、列出、所有、清单、包括、全部
+    """
+    is_list_question = any(kw in question for kw in ["有哪些", "列出", "所有", "清单", "包括", "全部", "列表"])
+    
+    if is_list_question:
+        instructions = (
+            "1. 如果参考知识中有相关信息，请完整列出参考内容中的所有项目，不要省略任何条目\n"
+            "2. 如果参考知识只包含部分条目，请列出所有已提供的条目，并在末尾注明完整清单请以官方文件为准\n"
+            "3. 如果参考知识中没有相关信息，请如实告知用户无法回答\n"
+            "4. 回答要结构清晰，保留表格格式\n\n"
+        )
+    else:
+        instructions = (
+            "1. 如果参考知识中有相关信息，请基于参考内容回答问题\n"
+            "2. 如果参考知识中没有相关信息，请如实告知用户无法回答\n"
+            "3. 回答要专业、准确、有条理\n\n"
+        )
+    
+    return (
+        "你是一个智能客服助手。请根据以下参考知识回答用户的问题。\n"
+        "要求：\n"
+        f"{instructions}"
+        f"参考知识：\n{context}\n\n"
+        f"用户问题：{question}\n\n"
+        "请回答："
+    )
+
+
 class RagEngine:
     """
     RAG 引擎：封装向量检索 → Rerank → LLM 生成的完整链路。
@@ -51,9 +124,9 @@ class RagEngine:
         self.llm = OllamaLLM(
             model=CHAT_MODEL,
             base_url=OLLAMA_BASE_URL,
-            temperature=0.3,   # 较低温度，保证回答基于参考知识，减少"创作"
-            num_ctx=4096,      # 上下文窗口大小（token 数）
-            timeout=120,       # 超时 120 秒，大模型推理可能较慢
+            temperature=0.3,
+            num_ctx=131072,
+            timeout=300,       # 超时 300 秒，大上下文推理需要更长时间
         )
 
     def _rerank_documents(self, query: str, documents: List[Document], top_k: int) -> List[Document]:
@@ -113,13 +186,128 @@ class RagEngine:
             scored = sorted(documents, key=lambda d: d.metadata.get("similarity_score", 0), reverse=True)
             return scored[:top_k]
 
+    def _expand_by_title(self, reranked: List[Document], all_docs: List[Document], top_k: int,
+                          collection_names: List[str] = None, question: str = "") -> List[Document]:
+        """
+        对 rerank 结果做标题路径扩展：
+        若某个 chunk 以 [标题路径] 开头进入了 top_k，
+        则直接从向量库里查出同一标题路径的所有 chunk 追加进来，
+        保证列表型/表格型章节能完整召回。
+
+        collection_names: 要搜索的集合列表，默认用 self.collection_name
+        """
+        import re as _re
+
+        def _title(text: str) -> str:
+            """提取 chunk 开头的 [标题路径] 部分，没有则返回空串"""
+            m = _re.match(r'^\[([^\]]+)\]', text.strip())
+            return m.group(1) if m else ""
+
+        # 从原始召回（all_docs）中取所有出现的标题
+        all_titles = set()
+        for doc in all_docs + reranked:
+            t = _title(doc.page_content)
+            if t:
+                all_titles.add(t)
+
+        # 标题匹配策略：
+        # 1. 标题直接出现在问题里 → 精确命中
+        # 2. 问题直接出现在标题里 → 精确命中（如「国内特药」在「国内特药药品清单」里）
+        # 3. 上述都失败 → 用向量相似度最高的 chunk 的标题（fallback）
+        hit_titles = set()
+        if question:
+            for t in all_titles:
+                if t in question or question in t:
+                    hit_titles.add(t)
+                    continue
+                # 提取标题的核心词（去掉「药品清单」「清单」等通用后缀），看核心词是否在问题里
+                core = t.replace('药品清单', '').replace('清单', '').replace('列表', '').strip()
+                if core and core in question:
+                    hit_titles.add(t)
+
+        # 如果精确匹配没找到，降级到全部标题（交给 char_limit 控制总量）
+        if not hit_titles:
+            hit_titles = all_titles
+
+        print(f"[RAG] _expand_by_title hit_titles: {hit_titles}")
+
+        if not hit_titles:
+            return reranked
+
+        # 已在 reranked 中的 chunk（用 page_content 前64字符作为标识）
+        seen = {doc.page_content[:64] for doc in reranked}
+
+        # 先从 all_docs（已召回的）里找
+        extra = []
+        for doc in all_docs:
+            key = doc.page_content[:64]
+            if key in seen:
+                continue
+            if _title(doc.page_content) in hit_titles:
+                extra.append(doc)
+                seen.add(key)
+
+        # 再从向量库里按标题前缀查，支持多 collection
+        # 再从向量库里按标题前缀查，支持多 collection
+        # 按各标题在召回结果中的最高相似度排序，高分标题给更多配额
+        from collections import defaultdict
+        title_max_sim = defaultdict(float)
+        for doc in reranked:
+            t = _title(doc.page_content)
+            if t:
+                sim = doc.metadata.get("similarity_score", 0)
+                if sim > title_max_sim[t]:
+                    title_max_sim[t] = sim
+
+        # 按相似度降序排列标题，相似度高的标题优先扩展更多 chunk
+        sorted_titles = sorted(hit_titles, key=lambda t: title_max_sim.get(t, 0), reverse=True)
+
+        cols_to_search = collection_names if collection_names else [self.collection_name]
+        try:
+            for col_name in cols_to_search:
+                col = self.vector_store._get_or_create_collection(col_name)
+                if col.count() == 0:
+                    continue
+                all_in_col = col.get(include=["documents", "metadatas"])
+                all_col_docs = all_in_col.get("documents", [])
+                print(f"[RAG] _expand_by_title scanning {col_name}: {len(all_col_docs)} docs")
+
+                # 按标题分组收集候选
+                title_candidates = defaultdict(list)
+                for doc_text, meta in zip(all_col_docs, all_in_col.get("metadatas", [])):
+                    key = doc_text[:64]
+                    if key in seen:
+                        continue
+                    for t in hit_titles:
+                        if doc_text.strip().startswith(f"[{t}]"):
+                            title_candidates[t].append((doc_text, meta))
+                            break
+
+                # 按标题相似度排序依次加入：相似度最高的标题不限量，其余标题最多 2 个 chunk
+                for rank, t in enumerate(sorted_titles):
+                    max_per_title = None if rank == 0 else 2
+                    for count, (doc_text, meta) in enumerate(title_candidates[t]):
+                        if max_per_title is not None and count >= max_per_title:
+                            break
+                        key = doc_text[:64]
+                        if key not in seen:
+                            extra.append(Document(page_content=doc_text, metadata=meta or {}))
+                            seen.add(key)
+
+        except Exception as e:
+            print(f"[RAG] _expand_by_title 向量库查询失败: {e}")
+
+        result_docs = reranked + extra
+        print(f"[RAG] _expand_by_title: reranked={len(reranked)}, extra={len(extra)}, total={len(result_docs)}, titles={hit_titles}")
+        return result_docs
+
     def _trim_context(self, context: str, max_tokens: int = 2000) -> str:
         """
         裁剪上下文文本，防止超出 LLM 的 prompt 长度限制。
 
         裁剪策略：
           按双换行分割成段落，贪心地从头累积，
-          直到预估字节数超过 max_tokens * 3 为止（中文字符约 3 字节）。
+          直到字符数超过 max_tokens * 2 为止（粗略：1 token ≈ 1.5~2 中文字符）。
 
         Args:
             context:    拼接的参考知识文本
@@ -128,17 +316,18 @@ class RagEngine:
         Returns:
             裁剪后的上下文文本
         """
+        limit = max_tokens * 2  # 字符数上限（比字节数更宽松，适合中文）
         parts = context.split(chr(10) + chr(10))  # 按空行分段
         kept = []
         total = 0
         for part in parts:
-            estimated = len(part.encode("utf-8"))
-            if total + estimated > max_tokens * 3:  # 超出限制则停止累积
+            part_len = len(part)
+            if total + part_len > limit:
                 break
             kept.append(part)
-            total += estimated
+            total += part_len
         # 若全部段落都超限，至少保留第一段的截断版本
-        return (chr(10) + chr(10)).join(kept) if kept else (parts[0][:max_tokens * 3] if parts else "")
+        return (chr(10) + chr(10)).join(kept) if kept else (parts[0][:limit] if parts else "")
 
     def retrieve_and_answer(self, question: str, chat_history: Optional[List[tuple]] = None) -> dict:
         """
@@ -175,35 +364,15 @@ class RagEngine:
 
         # ── 第二步：Rerank 精排 ─────────────────────────────────────
         reranked_docs = self._rerank_documents(question, relevant_docs, top_k=RERANK_TOP_K)
+        reranked_docs = self._expand_by_title(reranked_docs, relevant_docs, top_k=RERANK_TOP_K,
+                                               question=question)
 
-        # ── 第三步：构建参考上下文和来源信息 ────────────────────────
-        context_parts = []
-        sources = []
-        for i, doc in enumerate(reranked_docs):
-            context_parts.append(doc.page_content)
-            source_info = doc.metadata.get("source", "unknown")
-            sources.append({
-                "index":  i + 1,
-                "source": source_info,
-                # 优先使用 rerank_score，若无则降级使用向量相似度
-                "score":  round(doc.metadata.get("rerank_score", doc.metadata.get("similarity_score", 0)), 4),
-            })
-
-        context = (chr(10) + chr(10)).join(context_parts)
-        context = self._trim_context(context, max_tokens=2000)  # 裁剪防止超限
+        # ── 第三步：构建参考上下文和来源信息
+        context, sources = _build_context(reranked_docs)
+        print(f"[RAG] retrieve_and_answer 最终上下文: {len(sources)} 个chunk")
 
         # ── 第四步：构建 Prompt ─────────────────────────────────────
-        prompt_template = (
-            "你是一个智能客服助手。请根据以下参考知识回答用户的问题。\n"
-            "要求：\n"
-            "1. 如果参考知识中有相关信息，请基于参考内容回答问题\n"
-            "2. 如果参考知识中没有相关信息，请如实告知用户无法回答\n"
-            "3. 回答要专业、简洁、有条理\n\n"
-            "参考知识：\n{context}\n\n"
-            "用户问题：{question}\n\n"
-            "请回答："
-        )
-        system_prompt = prompt_template.format(context=context, question=question)
+        system_prompt = _build_rag_prompt(context, question)
 
         # 若有历史对话，将最近 6 条（3 轮）拼接到 prompt 前部
         if chat_history:
@@ -216,7 +385,7 @@ class RagEngine:
 
         # ── 第五步：LLM 生成回答 ────────────────────────────────────
         try:
-            answer = self.llm.invoke(system_prompt)
+            answer = self.llm.invoke(_maybe_no_think(system_prompt))
             return {
                 "answer":        answer.strip(),
                 "sources":       sources,
@@ -270,7 +439,8 @@ class RagEngine:
         """
         return self.vector_store.delete_by_source(filename, self.collection_name)
     
-    def answer_with_docs(self, question: str, documents: List[Document], chat_history: Optional[List[tuple]] = None) -> dict:
+    def answer_with_docs(self, question: str, documents: List[Document], chat_history: Optional[List[tuple]] = None,
+                          collection_names: List[str] = None) -> dict:
         """
         基于已提供的文档列表生成回答（用于跨知识库检索）。
         
@@ -297,34 +467,15 @@ class RagEngine:
         
         # Rerank 精排
         reranked_docs = self._rerank_documents(question, documents, top_k=RERANK_TOP_K)
+        reranked_docs = self._expand_by_title(reranked_docs, documents, top_k=RERANK_TOP_K,
+                                               collection_names=collection_names,
+                                               question=question)
         
         # 构建上下文和来源
-        context_parts = []
-        sources = []
-        for i, doc in enumerate(reranked_docs):
-            context_parts.append(doc.page_content)
-            source_info = doc.metadata.get("source", "unknown")
-            sources.append({
-                "index":  i + 1,
-                "source": source_info,
-                "score":  round(doc.metadata.get("rerank_score", doc.metadata.get("similarity_score", 0)), 4),
-            })
-        
-        context = (chr(10) + chr(10)).join(context_parts)
-        context = self._trim_context(context, max_tokens=2000)
+        context, sources = _build_context(reranked_docs)
         
         # 构建 Prompt
-        prompt_template = (
-            "你是一个智能客服助手。请根据以下参考知识回答用户的问题。\n"
-            "要求：\n"
-            "1. 如果参考知识中有相关信息，请基于参考内容回答问题\n"
-            "2. 如果参考知识中没有相关信息，请如实告知用户无法回答\n"
-            "3. 回答要专业、简洁、有条理\n\n"
-            "参考知识：\n{context}\n\n"
-            "用户问题：{question}\n\n"
-            "请回答："
-        )
-        system_prompt = prompt_template.format(context=context, question=question)
+        system_prompt = _build_rag_prompt(context, question)
         
         # 添加历史对话
         if chat_history:
@@ -337,7 +488,7 @@ class RagEngine:
         
         # LLM 生成
         try:
-            answer = self.llm.invoke(system_prompt)
+            answer = self.llm.invoke(_maybe_no_think(system_prompt))
             return {
                 "answer":        answer.strip(),
                 "sources":       sources,
@@ -357,7 +508,8 @@ class RagEngine:
                 "has_knowledge": True,
             }
 
-    def stream_answer_with_docs(self, question: str, documents: List[Document], chat_history: Optional[List[tuple]] = None):
+    def stream_answer_with_docs(self, question: str, documents: List[Document], chat_history: Optional[List[tuple]] = None,
+                                 collection_names: List[str] = None):
         """
         流式生成回答（SSE 版）。
         直接调用 Ollama /api/generate 流式接口，绕过 LangChain 缓冲问题。
@@ -376,34 +528,23 @@ class RagEngine:
 
         # Rerank 精排
         reranked_docs = self._rerank_documents(question, documents, top_k=RERANK_TOP_K)
+        print(f"[RAG] rerank后: {len(reranked_docs)} 个chunk")
+        for i, d in enumerate(reranked_docs):
+            import re as _re2
+            m = _re2.match(r'^\[([^\]]+)\]', d.page_content.strip())
+            title = m.group(1) if m else "(无标题)"
+            print(f"  [{i}] title={title!r:.40} chars={len(d.page_content)}")
+        reranked_docs = self._expand_by_title(reranked_docs, documents, top_k=RERANK_TOP_K,
+                                               collection_names=collection_names,
+                                               question=question)
+        print(f"[RAG] 扩展后: {len(reranked_docs)} 个chunk")
 
         # 构建上下文和来源
-        context_parts = []
-        sources = []
-        for i, doc in enumerate(reranked_docs):
-            context_parts.append(doc.page_content)
-            source_info = doc.metadata.get("source", "unknown")
-            sources.append({
-                "index":  i + 1,
-                "source": source_info,
-                "score":  round(doc.metadata.get("rerank_score", doc.metadata.get("similarity_score", 0)), 4),
-            })
-
-        context = (chr(10) + chr(10)).join(context_parts)
-        context = self._trim_context(context, max_tokens=2000)
+        context, sources = _build_context(reranked_docs)
+        print(f"[RAG] stream 最终上下文: {len(sources)} 个chunk")
 
         # 构建 Prompt（与 answer_with_docs 完全一致）
-        prompt_template = (
-            "你是一个智能客服助手。请根据以下参考知识回答用户的问题。\n"
-            "要求：\n"
-            "1. 如果参考知识中有相关信息，请基于参考内容回答问题\n"
-            "2. 如果参考知识中没有相关信息，请如实告知用户无法回答\n"
-            "3. 回答要专业、简洁、有条理\n\n"
-            "参考知识：\n{context}\n\n"
-            "用户问题：{question}\n\n"
-            "请回答："
-        )
-        system_prompt = prompt_template.format(context=context, question=question)
+        system_prompt = _build_rag_prompt(context, question)
 
         if chat_history:
             history_lines = []
@@ -416,22 +557,36 @@ class RagEngine:
         # 直接调用 Ollama /api/generate 流式接口（绕过 LangChain 缓冲）
         full_answer = []
         try:
-            with httpx.Client(transport=httpx.HTTPTransport(), timeout=120) as client:
+            import config as _cfg
+            from config import THINKING
+            with httpx.Client(transport=httpx.HTTPTransport(), timeout=300) as client:
                 with client.stream(
                     "POST",
-                    f"{OLLAMA_BASE_URL}/api/generate",
+                    f"{_cfg.OLLAMA_BASE_URL}/api/generate",
                     json={
-                        "model":  CHAT_MODEL,
+                        "model":  _cfg.CHAT_MODEL,
                         "prompt": system_prompt,
                         "stream": True,
                         "options": {
                             "temperature": 0.3,
-                            "num_ctx":     4096,
+                            "num_ctx":     131072,
                         },
+                        "think": THINKING,
                     },
                 ) as resp:
                     resp.raise_for_status()
+                    token_count = 0
+                    raw_count = 0
                     for line in resp.iter_lines():
+                        if not line:
+                            continue
+                        try:
+                            chunk = _json.loads(line)
+                        except Exception:
+                            continue
+                        raw_count += 1
+                        if raw_count <= 3:  # 打印前3个chunk看结构
+                            print(f"[RAG] raw chunk[{raw_count}]: {str(chunk)[:150]}")
                         if not line:
                             continue
                         try:
@@ -441,8 +596,13 @@ class RagEngine:
                         token = chunk.get("response", "")
                         if token:
                             full_answer.append(token)
+                            token_count += 1
                             yield {"token": token}
                         if chunk.get("done"):
+                            print(f"[RAG] stream done, total_tokens={token_count}, answer_len={len(''.join(full_answer))}")
+                            # 调试：打印原始chunk内容
+                            if token_count == 0:
+                                print(f"[RAG] done chunk keys: {list(chunk.keys())}, sample: {str(chunk)[:200]}")
                             break
 
             yield {
