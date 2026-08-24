@@ -28,12 +28,14 @@
 
 - 🚀 **开箱即用** — 本地部署，无需云服务，保护数据隐私
 - 📚 **多格式支持** — PDF、Word、Excel、PowerPoint、Markdown、TXT 自动解析
-- 🧠 **智能检索** — 向量检索 + Rerank 精排，确保答案准确性
+- 🧠 **智能检索** — 向量检索 + Rerank 精排 + 标题树章节扩展，确保答案准确性
 - 💬 **多轮对话** — 支持上下文记忆的连续对话
 - 🗄️ **多知识库管理** — 创建、启用/禁用多个独立知识库
-- 🎨 **现代界面** — 响应式 Web UI，支持移动端和桌面端
+- 🎨 **现代界面** — 响应式 Web UI，支持移动端和桌面端，Markdown 表格渲染
 - ⚡ **高性能** — ChromaDB 向量存储，毫秒级检索响应
 - 🔄 **模型热切换** — 在线更换 LLM/Embedding/Rerank 模型
+- 🌊 **流式输出** — 默认开启，逐 token 实时渲染
+- 🤔 **Thinking 模式** — 支持开启/关闭模型思考模式，适配 qwen3 等推理模型
 
 ### 🏗️ 技术架构
 
@@ -116,6 +118,9 @@
 - ✅ 在线切换 Embedding 模型（自动重建索引）
 - ✅ 在线切换 OCR 视觉模型（用于图片型 PDF / 扫描件）
 - ✅ 调整检索参数（TOP-K、Rerank-TOP-K 等）
+- ✅ 调整上下文窗口大小（num_ctx），单位 K，默认 128K
+- ✅ 调整参考知识字符数（context_limit），单位 K，默认 20K
+- ✅ 开启/关闭模型思考模式（thinking），适配 qwen3 等推理模型
 - ✅ 实时显示模型加载状态
 
 #### 5. 文档切分方式
@@ -133,8 +138,12 @@
 
 #### 5. 通用设置
 - ✅ **主题切换** — 浅色 / 深色两种主题，设置后即时生效并跨页面持久保存
-- ✅ **流式输出开关** — 可随时切换逐字流式输出或等待完整答案一次性显示，默认关闭
+- ✅ **流式输出开关** — 可随时切换逐字流式输出或等待完整答案一次性显示，**默认开启**
 - ✅ **双语界面** — 支持中文 / English 切换，点击顶栏 `EN`/`中` 按钮或在通用设置中选择，即时生效无需刷新
+
+#### 6. 智能召回增强（标题树切分专属）
+
+当知识库使用标题树切分时，系统会自动识别被召回 chunk 所属的章节标题，并将该章节的所有 chunk 一并送入 LLM，确保列举型问题（「有哪些」「清单」等）能完整回答，而不是只返回部分条目。
 
 ### 📦 快速开始
 
@@ -244,13 +253,16 @@ OLLAMA_BASE_URL=http://localhost:11434
 CHAT_MODEL=qwen3.6:27b                      # 对话模型
 EMBED_MODEL=qwen3-embedding:4b               # 嵌入模型
 RERANK_MODEL=qllama/bge-reranker-v2-m3:f16  # Rerank 模型
-OCR_MODEL=qwen2.5vl:7b![alt text](image.png)                                   # OCR 视觉模型（留空禁用，如 qwen2.5vl:7b）
+OCR_MODEL=qwen2.5vl:7b                      # OCR 视觉模型（留空禁用）
 
 # RAG 参数
 TOP_K=6                # 向量检索召回数量
 RERANK_TOP_K=4         # Rerank 精排后保留数量
 CHUNK_SIZE=500         # 文档分块大小（token）
 CHUNK_OVERLAP=50       # 分块重叠大小（token）
+CHUNK_METHOD=recursive # 切分方式：recursive | markdown | semantic | fixed
+CONTEXT_LIMIT=20000    # 送入 LLM 的最大参考知识字符数
+THINKING=false         # 模型思考模式（false 关闭，适配 qwen3 等推理模型）
 
 # 服务配置
 HOST=0.0.0.0
@@ -358,10 +370,14 @@ Ollama 首次加载大模型需要时间（30秒-几分钟），请耐心等待�
 - [x] 向量检索 + Rerank
 - [x] 多轮对话历史
 - [x] 模型热切换
-- [x] 参数动态调整
+- [x] 参数动态调整（TOP-K、num_ctx、context_limit 等）
 - [x] 图片型 PDF OCR 支持（基于 Ollama 视觉模型）
-- [x] 流式输出（SSE 逐 token 实时渲染）
+- [x] 流式输出（SSE 逐 token 实时渲染，默认开启）
 - [x] 深色 / 浅色主题切换
+- [x] 标题树切分 + 章节完整召回（列举型问题优化）
+- [x] Thinking 模式参数化（适配 qwen3 等推理模型）
+- [x] 前端 Markdown 表格渲染
+- [x] 切分参数独立设置（每个文档可单独配置）
 - [ ] 文档在线预览
 - [ ] 导出聊天记录
 - [ ] 多用户权限管理
@@ -400,14 +416,14 @@ Ollama 首次加载大模型需要时间（30秒-几分钟），请耐心等待�
 
 - 🚀 **Ready to Use** — Local deployment, no cloud services required, data privacy protected
 - 📚 **Multi-format Support** — Auto-parsing for PDF, Word, Excel, PowerPoint, Markdown, TXT
-- 🧠 **Smart Retrieval** — Vector search + Rerank for accurate answers
+- 🧠 **Smart Retrieval** — Vector search + Rerank + header-tree section expansion for accurate answers
 - 💬 **Multi-turn Dialogue** — Context-aware conversations with memory
 - 🗄️ **Multiple Knowledge Bases** — Create, enable/disable multiple independent knowledge bases
-- 🎨 **Modern UI** — Responsive web interface for mobile and desktop
+- 🎨 **Modern UI** — Responsive web interface, Markdown table rendering
 - ⚡ **High Performance** — ChromaDB vector storage with millisecond-level response
 - 🔄 **Hot Model Swapping** — Switch LLM/Embedding/Rerank/OCR models on-the-fly
-- 🌊 **Streaming Output** — Real-time token-by-token rendering via SSE
-- 🌓 **Theme Switching** — Light and dark themes, persisted across pages
+- 🌊 **Streaming Output** — Enabled by default, real-time token-by-token rendering via SSE
+- 🤔 **Thinking Mode** — Toggle model reasoning mode, compatible with qwen3 and other reasoning models
 
 ### 🏗️ Tech Stack
 
@@ -519,13 +535,16 @@ OLLAMA_BASE_URL=http://localhost:11434
 CHAT_MODEL=qwen3.6:27b                      # Chat model
 EMBED_MODEL=qwen3-embedding:4b               # Embedding model (⚠️ rebuild index on change)
 RERANK_MODEL=qllama/bge-reranker-v2-m3:f16  # Rerank model
-OCR_MODEL=qwen2.5vl:7b                                   # OCR vision model (leave empty to disable, e.g. qwen2.5vl:7b)
+OCR_MODEL=qwen2.5vl:7b                      # OCR vision model (leave empty to disable)
 
 # RAG parameters
 TOP_K=6                # Vector search recall count
 RERANK_TOP_K=4         # Top results after reranking
 CHUNK_SIZE=500         # Document chunk size (tokens)
 CHUNK_OVERLAP=50       # Chunk overlap size (tokens)
+CHUNK_METHOD=recursive # Chunking method: recursive | markdown | semantic | fixed
+CONTEXT_LIMIT=20000    # Max reference knowledge characters sent to LLM
+THINKING=false         # Model thinking mode (false to disable, for qwen3 etc.)
 
 # Service configuration
 HOST=0.0.0.0
