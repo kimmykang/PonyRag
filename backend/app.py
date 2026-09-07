@@ -65,7 +65,7 @@ from pydantic import BaseModel
 from config import HOST, PORT, UPLOAD_DIR, VECTOR_DB_PATH, OLLAMA_BASE_URL, CHAT_MODEL, EMBED_MODEL, RERANK_MODEL, OCR_MODEL
 from document_processor import (
     parse_document, chunk_texts, upload_file, list_documents, cleanup_document,
-    convert_to_md, ALLOWED_EXTENSIONS,
+    convert_to_md, ALLOWED_EXTENSIONS, auto_detect_chunk_method,
 )
 from rag_engine import RagEngine
 from vector_store import VectorStoreManager
@@ -86,6 +86,11 @@ _rag_engines_lock = threading.Lock()
 
 # 兼容旧代码的 rag_engine 变量（指向默认知识库引擎）
 rag_engine: Optional[RagEngine] = None
+
+# 全局 abort 字典：{ session_id: threading.Event }
+# 前端调 /api/chat/abort 时设置对应 Event，流式生成循环检测到后退出
+_abort_events: dict = {}
+_abort_events_lock = threading.Lock()
 
 # ──────────────────────────────────────────────────────────────
 # 模型状态管理
@@ -317,12 +322,18 @@ class ChatRequest(BaseModel):
     kb_ids: Optional[list] = None         # 要检索的知识库 ID 列表，None 时检索所有启用的知识库
 
 
+class AbortRequest(BaseModel):
+    """中止请求体"""
+    session_id: Optional[str] = None
+
+
 class ChatResponse(BaseModel):
     """聊天响应体"""
     answer: str          # LLM 生成的回答
     sources: list        # 参考来源列表，每项含 index/source/score
     has_knowledge: bool  # 是否从知识库中找到相关内容
     session_id: str      # 回传 session_id，前端可用于续接对话
+    usage: Optional[dict] = None  # token 用量: {prompt_tokens, completion_tokens, total_tokens}
 
 
 class ModelInfo(BaseModel):
@@ -1266,6 +1277,11 @@ async def chat_stream(req: ChatRequest):
     session_id = req.session_id or str(uuid.uuid4())
     main_engine = get_rag_engine(kb_ids[0])
 
+    # 为本次会话创建 abort event
+    abort_event = threading.Event()
+    with _abort_events_lock:
+        _abort_events[session_id] = abort_event
+
     # 检索全部失败且有错误信息，立即返回错误
     if not all_docs and search_errors:
         first_err = search_errors[0]
@@ -1298,6 +1314,7 @@ async def chat_stream(req: ChatRequest):
                     documents=all_docs,
                     chat_history=req.chat_history,
                     collection_names=kb_ids,
+                    abort_event=abort_event,
                 ):
                     loop.call_soon_threadsafe(queue.put_nowait, event)
             except Exception as e:
@@ -1323,6 +1340,7 @@ async def chat_stream(req: ChatRequest):
                     "sources":       sources,
                     "has_knowledge": has_knowledge,
                     "session_id":    session_id,
+                    "usage":         event.get("usage"),
                 }
                 yield f"data: {_json.dumps(final, ensure_ascii=False)}\n\n"
             elif "error" in event:
@@ -1332,6 +1350,10 @@ async def chat_stream(req: ChatRequest):
         # 保存聊天记录
         save_message(session_id, "user", req.question)
         save_message(session_id, "assistant", "".join(full_answer).strip(), sources)
+
+        # 清理 abort event
+        with _abort_events_lock:
+            _abort_events.pop(session_id, None)
 
     return _SR(
         _generate(),
@@ -1433,6 +1455,27 @@ async def get_reindex_status():
         status["percentage"] = 0.0
     
     return status
+
+
+@app.post("/api/chat/abort")
+async def abort_chat(req: AbortRequest):
+    """
+    中止指定 session 的流式生成，通知后端停止向 Ollama 读取 token。
+
+    前端在用户点击停止按钮时调用，传入当前 session_id。
+    后端设置对应的 threading.Event，stream_answer_with_docs 的
+    token 循环检测到后会立即 break，从而关闭 httpx 流，停止 GPU 推理。
+    """
+    sid = req.session_id
+    if not sid:
+        return {"status": "no_session"}
+    with _abort_events_lock:
+        event = _abort_events.get(sid)
+    if event:
+        event.set()
+        print(f"[Abort] session={sid} abort signal sent")
+        return {"status": "aborted"}
+    return {"status": "not_found"}
 
 
 @app.post("/api/reload-model/{model_key}")
@@ -1600,6 +1643,50 @@ async def save_config(req: ModelConfigRequest):
     }
 
 
+@app.post("/api/detect-chunk-method")
+async def detect_chunk_method(
+    file: UploadFile = File(...),
+    kb_id: str = "knowledge_base",
+):
+    """
+    上传文件并用 LLM 自动检测推荐的切分方式。
+
+    流程：
+      1. 将文件保存到临时位置
+      2. 若非 .md，调用 markitdown 转换
+      3. 读取前 1500 字符，调用对话模型判断切分方式
+      4. 返回推荐结果，不做向量化
+
+    响应：{"method": "markdown" | "recursive" | "semantic", "filename": "xxx.md"}
+    """
+    import tempfile, os
+    suffix = Path(file.filename).suffix.lower()
+    if suffix not in ALLOWED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"不支持的文件格式: {suffix}")
+
+    # 保存到临时目录
+    tmp_dir = Path(tempfile.mkdtemp())
+    tmp_path = tmp_dir / file.filename
+    content = await file.read()
+    tmp_path.write_bytes(content)
+
+    try:
+        # 转换为 md
+        if suffix != ".md":
+            md_path = convert_to_md(str(tmp_path))
+        else:
+            md_path = str(tmp_path)
+
+        method = auto_detect_chunk_method(md_path)
+        return {"method": method, "filename": Path(md_path).name}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"检测失败: {e}")
+    finally:
+        # 清理临时文件
+        import shutil
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
 @app.post("/api/upload")
 async def upload_doc(
     file: UploadFile = File(...),
@@ -1624,7 +1711,6 @@ async def upload_doc(
     _chunk_method  = (chunk_method  or getattr(_cfg, "CHUNK_METHOD",  "recursive")).strip().lower()
     _chunk_size    = chunk_size    if chunk_size    is not None else _cfg.CHUNK_SIZE
     _chunk_overlap = chunk_overlap if chunk_overlap is not None else _cfg.CHUNK_OVERLAP
-    # 验证知识库是否存在
     kb = get_kb(kb_id)
     if not kb:
         raise HTTPException(status_code=404, detail=f"知识库 {kb_id} 不存在")
@@ -1646,13 +1732,24 @@ async def upload_doc(
 
     md_path = Path(fpath)
     # 若非 md 文件，调用 markitdown 转换
+    # 删除已有的同名 .md，强制重新转换（确保 LLM 表格后处理总是执行）
     if md_path.suffix.lower() != ".md":
+        existing_md = md_path.with_suffix(".md")
+        if existing_md.exists():
+            existing_md.unlink()
+            print(f"[Upload] 删除旧 md，强制重新转换: {existing_md.name}")
         try:
             md_path = Path(convert_to_md(fpath))  # convert_to_md 返回字符串，转为 Path
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Markitdown 转换失败: {e}")
 
     # 读取 md 内容并直接传参分块（不覆盖全局 config，线程安全）
+    # 若切分方式为 auto，先用 LLM 检测推荐方式
+    if _chunk_method == "auto":
+        detected = auto_detect_chunk_method(str(md_path))
+        print(f"[Upload] 自动检测切分方式: {pure_filename} → {detected}")
+        _chunk_method = detected
+
     texts = parse_document(str(md_path))
     if not texts:
         raise HTTPException(status_code=400, detail="文档为空或无法解析")
@@ -1802,7 +1899,7 @@ async def rechunk_document(req: RechunkRequest):
         raise HTTPException(status_code=404, detail=f"找不到文档的 .md 文件: {md_filename}")
 
     # 参数校验
-    if req.chunk_method not in ("fixed", "recursive", "markdown", "semantic"):
+    if req.chunk_method not in ("fixed", "recursive", "markdown", "semantic", "auto"):
         raise HTTPException(status_code=400, detail="chunk_method 无效")
     if req.chunk_size < 100 or req.chunk_size > 2000:
         raise HTTPException(status_code=400, detail="chunk_size 范围: 100~2000")
@@ -1814,7 +1911,12 @@ async def rechunk_document(req: RechunkRequest):
     removed = engine.delete_document(md_filename)
     print(f"[Rechunk] 已删除旧向量: {md_filename} ({removed} 块)")
 
-    # 步骤2：重新切分
+    # 步骤2：重新切分（auto 模式先检测）
+    actual_method = req.chunk_method
+    if actual_method == "auto":
+        actual_method = auto_detect_chunk_method(str(md_path))
+        print(f"[Rechunk] 自动检测切分方式: {md_filename} → {actual_method}")
+
     texts = parse_document(str(md_path))
     if not texts:
         raise HTTPException(status_code=400, detail="文档为空或无法解析")
@@ -1822,7 +1924,7 @@ async def rechunk_document(req: RechunkRequest):
     chunks = chunk_texts(
         texts,
         is_markdown=True,
-        method=req.chunk_method,
+        method=actual_method,
         chunk_size=req.chunk_size,
         chunk_overlap=req.chunk_overlap,
     )
@@ -1832,11 +1934,11 @@ async def rechunk_document(req: RechunkRequest):
     # 步骤3：入库
     engine.ingest_document(md_filename, chunks)
 
-    # 步骤4：更新 SQLite 切分记录
+    # 步骤4：更新 SQLite 切分记录（记录实际使用的方式，而不是 auto）
     save_doc_chunk_record(
         kb_id=req.kb_id, filename=md_filename,
         embed_model=_cfg.EMBED_MODEL,
-        chunk_method=req.chunk_method,
+        chunk_method=actual_method,
         chunk_size=req.chunk_size,
         chunk_overlap=req.chunk_overlap,
         chunk_count=len(chunks),
@@ -1967,8 +2069,8 @@ async def save_rag_params(req: RagParamsRequest):
         raise HTTPException(status_code=400, detail="num_ctx 范围: 512~524288")
     if req.context_limit < 1000 or req.context_limit > 200000:
         raise HTTPException(status_code=400, detail="context_limit 范围: 1000~200000")
-    if req.chunk_method not in ("fixed", "recursive", "markdown", "semantic"):
-        raise HTTPException(status_code=400, detail="chunk_method 必须为 fixed/recursive/markdown/semantic")
+    if req.chunk_method not in ("fixed", "recursive", "markdown", "semantic", "auto"):
+        raise HTTPException(status_code=400, detail="chunk_method 必须为 fixed/recursive/markdown/semantic/auto")
 
     # 写入 .env
     env_path = Path(__file__).parent / ".env"

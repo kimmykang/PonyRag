@@ -251,12 +251,16 @@
                     <!-- 多行文本输入框，高度自动随内容增长（最大 120px） -->
                     <textarea id="questionInput" class="question-input" placeholder="输入您的问题..." rows="1" autocomplete="off"></textarea>
 
-                    <!-- 发送按钮（初始禁用），输入内容后启用 -->
+                    <!-- 发送/停止按钮 -->
                     <button type="submit" class="send-btn" id="sendBtn" disabled>
                         <!-- 发送（纸飞机）图标 -->
-                        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+                        <svg class="icon-send" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
                             <line x1="22" y1="2" x2="11" y2="13"></line>
                             <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                        </svg>
+                        <!-- 停止（方块）图标，正在生成时显示 -->
+                        <svg class="icon-stop" viewBox="0 0 24 24" width="18" height="18" fill="currentColor" style="display:none">
+                            <rect x="4" y="4" width="16" height="16" rx="2" />
                         </svg>
                     </button>
                 </form>
@@ -379,6 +383,13 @@
                             <span class="params-hint" data-i18n="params.chunkMethodHint">决定文档如何分割成检索块</span>
                         </label>
                         <div class="chunk-method-selector">
+                            <label class="chunk-method-option">
+                                <input type="radio" name="chunkMethod" value="auto">
+                                <div class="chunk-method-card">
+                                    <span class="chunk-method-name" data-i18n="chunk.auto">🤖 自动检测</span>
+                                    <span class="chunk-method-desc" data-i18n="chunk.auto.desc">上传时由 LLM 分析文档结构，自动推荐最合适的切分方式。</span>
+                                </div>
+                            </label>
                             <label class="chunk-method-option">
                                 <input type="radio" name="chunkMethod" value="fixed">
                                 <div class="chunk-method-card">

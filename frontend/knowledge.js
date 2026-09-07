@@ -811,12 +811,48 @@ async function handleDocsUpload(event) {
             const uploadMethodEl = document.getElementById('uploadChunkMethod');
             const uploadSizeEl = document.getElementById('uploadChunkSize');
             const uploadOverlapEl = document.getElementById('uploadChunkOverlap');
-            const chunkMethod = uploadMethodEl ? uploadMethodEl.value : '';
+            let chunkMethod = uploadMethodEl ? uploadMethodEl.value : '';
             const chunkSize = uploadSizeEl ? uploadSizeEl.value : '';
             const chunkOverlap = uploadOverlapEl ? uploadOverlapEl.value : '';
 
+            // 如果选择了「自动检测」，先调 detect 接口获取推荐方式
+            if (chunkMethod === 'auto') {
+                try {
+                    progressText.textContent = `(${i + 1}/${files.length}) ${file.name} — 🤖 LLM 检测切分方式...`;
+                    const detectForm = new FormData();
+                    detectForm.append('file', file);
+                    detectForm.append('kb_id', kbId);
+                    const detectRes = await fetch(`${API_BASE}/api/detect-chunk-method?kb_id=${encodeURIComponent(kbId)}`, {
+                        method: 'POST',
+                        body: detectForm,
+                    });
+                    if (detectRes.ok) {
+                        const detectData = await detectRes.json();
+                        chunkMethod = detectData.method || 'recursive';
+                        // 回显检测结果
+                        const resultDiv = document.getElementById('autoDetectResult');
+                        const resultText = document.getElementById('autoDetectText');
+                        const METHOD_NAMES = {
+                            markdown: '📑 标题树切分',
+                            recursive: '🔀 递归切分',
+                            semantic: '🧠 语义切分'
+                        };
+                        if (resultDiv && resultText) {
+                            resultText.textContent = `${file.name} → 推荐 ${METHOD_NAMES[chunkMethod] || chunkMethod}`;
+                            resultDiv.style.display = 'block';
+                        }
+                    } else {
+                        chunkMethod = 'recursive';
+                    }
+                } catch (e) {
+                    console.warn('[AutoDetect] 检测失败，降级到 recursive:', e);
+                    chunkMethod = 'recursive';
+                }
+                progressText.textContent = `(${i + 1}/${files.length}) ${file.name}`;
+            }
+
             let uploadUrl = `${API_BASE}/api/upload?kb_id=${encodeURIComponent(kbId)}`;
-            if (chunkMethod) uploadUrl += `&chunk_method=${encodeURIComponent(chunkMethod)}`;
+            if (chunkMethod && chunkMethod !== 'auto') uploadUrl += `&chunk_method=${encodeURIComponent(chunkMethod)}`;
             if (chunkSize) uploadUrl += `&chunk_size=${encodeURIComponent(chunkSize)}`;
             if (chunkOverlap) uploadUrl += `&chunk_overlap=${encodeURIComponent(chunkOverlap)}`;
 
@@ -1075,6 +1111,7 @@ function _updateUploadChunkPanel() {
 
     const METHOD_NAMES = {
         '': t('docs.chunkGlobal'),
+        'auto': t('docs.chunkAuto'),
         'fixed': t('chunk.fixed.short'),
         'recursive': t('chunk.recursive.short'),
         'markdown': t('chunk.markdown.short'),
@@ -1083,10 +1120,16 @@ function _updateUploadChunkPanel() {
 
     if (badge) badge.textContent = METHOD_NAMES[method] || method;
 
-    // 所有切分方式都允许设置 chunk_size（标题树/语义用于二次切分上限）
+    // auto 和具体方式都显示 size/overlap（auto 检测完后实际用某种方式）
     const showSize = true;
     if (sizeRow) sizeRow.style.display = showSize ? '' : 'none';
     if (overRow) overRow.style.display = showSize ? '' : 'none';
+
+    // auto 选中时隐藏 autoDetectResult（重新选择后清除上次结果）
+    if (method !== 'auto') {
+        const resultDiv = document.getElementById('autoDetectResult');
+        if (resultDiv) resultDiv.style.display = 'none';
+    }
 }
 
 // ── 重新切分文档 ─────────────────────────────────────────────
@@ -1172,7 +1215,14 @@ async function confirmRechunk() {
 
 function refreshChunkMethodSelects() {
     var globalLabel = '— ' + t('docs.chunkGlobal') + ' —';
+    var autoLabel = t('docs.chunkAuto') || '🤖 自动检测（LLM 推荐）';
     var methods = [{
+            value: 'auto',
+            text: function() {
+                return autoLabel;
+            }
+        },
+        {
             value: 'fixed',
             text: function() {
                 return t('chunk.fixed') + ' - ' + t('chunk.fixed.hint');

@@ -42,8 +42,316 @@ ALLOWED_EXTENSIONS = _MD_NATIVE | _CONVERTIBLE
 
 
 # ──────────────────────────────────────────────────────────────
+# LLM 自动检测切分方式
+# ──────────────────────────────────────────────────────────────
+
+def auto_detect_chunk_method(md_path: str) -> str:
+    """
+    读取 .md 文件前 1500 字符，调用 Ollama 对话模型判断最适合的切分方式。
+
+    返回值: "markdown" | "recursive" | "semantic"
+    失败时降级返回 "recursive"
+
+    判断逻辑：
+      - markdown  — 文档有明显的 #/## 标题层级（结构化文档）
+      - semantic  — 叙事型长文，无明显标题，段落间语义跳跃
+      - recursive — 通用文档，或无法判断时的默认值
+    """
+    from config import CHAT_MODEL, OLLAMA_BASE_URL, THINKING
+    try:
+        content = Path(md_path).read_text(encoding="utf-8")
+        sample = content[:1500].strip()
+        if not sample:
+            return "recursive"
+
+        prompt = (
+            "/no_think\n"
+            "请分析以下文档片段，判断最适合的文本切分方式，只返回一个英文单词（markdown / recursive / semantic）：\n\n"
+            "切分方式说明：\n"
+            "- markdown  ：文档有明显的 #/## 标题层级结构（如产品手册、条款、API文档、表格型知识库）\n"
+            "- semantic  ：叙事型长文，无明显标题，段落间有语义跳跃（如新闻、书籍、报告）\n"
+            "- recursive ：通用文档，混合结构，或不确定时\n\n"
+            f"文档片段：\n{sample}\n\n"
+            "只返回一个词（markdown 或 recursive 或 semantic），不要解释："
+        )
+
+        with httpx.Client(transport=httpx.HTTPTransport(), timeout=30) as client:
+            resp = client.post(
+                f"{OLLAMA_BASE_URL}/api/generate",
+                json={
+                    "model": CHAT_MODEL,
+                    "prompt": prompt,
+                    "stream": False,
+                    "think": THINKING,
+                    "options": {"temperature": 0, "num_ctx": 2048},
+                },
+            )
+            resp.raise_for_status()
+            result = resp.json().get("response", "").strip().lower()
+
+        # 提取第一个合法词
+        for word in result.split():
+            clean = word.strip(".,;:\"'")
+            if clean in ("markdown", "recursive", "semantic"):
+                print(f"[AutoDetect] {Path(md_path).name} → {clean}")
+                return clean
+
+        print(f"[AutoDetect] 无法解析结果 '{result}'，降级到 recursive")
+        return "recursive"
+
+    except Exception as e:
+        print(f"[AutoDetect] 检测失败: {e}，降级到 recursive")
+        return "recursive"
+
+
+# ──────────────────────────────────────────────────────────────
 # 文件转换
 # ──────────────────────────────────────────────────────────────
+
+def _ocr_pdf_with_vision(pdf_path: str) -> str:
+    """
+    用 OCR 视觉模型（Ollama）逐页识别纯图片 PDF。
+
+    将每页渲染为图片，base64 编码后调用 Ollama 多模态接口提取文字。
+    用于 pdfplumber 无法提取到文字的扫描件 / 图片型 PDF。
+
+    Returns:
+        提取到的 Markdown 文本；失败时返回空字符串
+    """
+    try:
+        import fitz  # PyMuPDF
+    except ImportError:
+        print(f"[Convert] PyMuPDF 未安装，OCR 降级跳过。可运行: pip install pymupdf")
+        return ""
+
+    import base64, httpx as _httpx
+
+    print(f"[Convert] 图片型 PDF，启动 OCR 视觉模型: {Path(pdf_path).name}")
+    all_pages_md = []
+
+    doc = fitz.open(pdf_path)
+    total = len(doc)
+    print(f"[Convert]   共 {total} 页，逐页 OCR...")
+
+    for page_num in range(total):
+        page = doc[page_num]
+        # 渲染为 2x 分辨率图片，提升 OCR 精度
+        mat = fitz.Matrix(2, 2)
+        pix = page.get_pixmap(matrix=mat)
+        img_bytes = pix.tobytes("png")
+        img_b64 = base64.b64encode(img_bytes).decode("utf-8")
+
+        prompt = (
+            "请识别图片中的所有文字内容，保持原始格式。"
+            "如有表格，用 Markdown 表格格式输出；如有标题，用 # 标记。"
+            "只输出识别到的文字内容，不要额外说明。"
+        )
+
+        try:
+            with _httpx.Client(transport=_httpx.HTTPTransport(), timeout=120) as client:
+                resp = client.post(
+                    f"{OLLAMA_BASE_URL}/api/generate",
+                    json={
+                        "model": OCR_MODEL,
+                        "prompt": prompt,
+                        "images": [img_b64],
+                        "stream": False,
+                        "options": {"temperature": 0},
+                    },
+                )
+                resp.raise_for_status()
+                page_text = resp.json().get("response", "").strip()
+                if page_text:
+                    all_pages_md.append(f"## Page {page_num + 1}\n\n{page_text}")
+                    print(f"[Convert]   第{page_num + 1}页 OCR: {len(page_text)} 字符")
+                else:
+                    print(f"[Convert]   第{page_num + 1}页 OCR: 未识别到内容")
+        except Exception as e:
+            print(f"[Convert]   第{page_num + 1}页 OCR 失败: {e}")
+
+    doc.close()
+    result = "\n\n".join(all_pages_md)
+    print(f"[Convert]   OCR 完成: {len(result)} 字符")
+    return result
+
+
+def _convert_pdf_smart(pdf_path: str) -> str:
+    """
+    用 pdfplumber 智能转换 PDF：
+    - 表格：精确提取，正确处理合并单元格，转为标准 Markdown 表格
+    - 文字页：直接提取文本
+    - 图片页（扫描件）：自动降级到 OCR 视觉模型处理
+    """
+    try:
+        import pdfplumber as _plumber
+    except ImportError:
+        # pdfplumber 不可用，降级为 markitdown 普通转换
+        from markitdown import MarkItDown
+        print(f"[Convert] pdfplumber 不可用，使用普通转换: {Path(pdf_path).name}")
+        result = MarkItDown().convert(pdf_path)
+        return result.text_content or ""
+
+    print(f"[Convert] pdfplumber 智能转换: {Path(pdf_path).name} → {Path(pdf_path).parent.name}/{Path(pdf_path).name}")
+
+    all_pages_md = []
+    text_page_count = 0
+
+    with _plumber.open(pdf_path) as pdf:
+        total = len(pdf.pages)
+        print(f"[Convert]   共 {total} 页")
+
+        for page_num, page in enumerate(pdf.pages, 1):
+            page_md_parts = []
+
+            # 提取表格
+            tables = page.extract_tables()
+            table_bboxes = []
+
+            for table_obj in page.find_tables():
+                table_bboxes.append(table_obj.bbox)
+
+            if tables:
+                table_count = len(tables)
+                for table in tables:
+                    if not table or len(table) < 1:
+                        continue
+                    # 展开合并单元格（None 继承同列上一行的值）
+                    expanded = []
+                    prev_row = ['' ] * max(len(r) for r in table)
+                    for row in table:
+                        new_row = []
+                        for j in range(len(prev_row)):
+                            cell = row[j] if j < len(row) else None
+                            if cell is None and prev_row[j]:
+                                new_row.append(prev_row[j])
+                            else:
+                                new_row.append(cell or '')
+                        expanded.append(new_row)
+                        prev_row = new_row
+
+                    def cell_md(c):
+                        return str(c).replace('\n', '<br>').strip() if c else ''
+
+                    if len(expanded) >= 1:
+                        header = expanded[0]
+                        data = expanded[1:] if len(expanded) > 1 else []
+                        md_table = '| ' + ' | '.join(cell_md(h) for h in header) + ' |\n'
+                        md_table += '| ' + ' | '.join('---' for _ in header) + ' |\n'
+                        for row in data:
+                            md_table += '| ' + ' | '.join(cell_md(c) for c in row) + ' |\n'
+                        page_md_parts.append(md_table.strip())
+                print(f"[Convert]   第{page_num}页: {table_count}张表格, {sum(len(t) for t in tables)}行数据")
+
+            # 提取非表格区域的文字
+            if table_bboxes:
+                # 过滤掉表格区域，只提取非表格文字
+                text_outside = page.filter(
+                    lambda obj: obj.get('object_type') == 'char' and
+                    not any(
+                        bbox[0] <= obj['x0'] <= bbox[2] and
+                        bbox[1] <= obj['top'] <= bbox[3]
+                        for bbox in table_bboxes
+                    )
+                ).extract_text()
+                if text_outside and text_outside.strip():
+                    page_md_parts.insert(0, text_outside.strip())
+            else:
+                text = page.extract_text()
+                if text and text.strip():
+                    page_md_parts.append(text.strip())
+
+            if page_md_parts:
+                all_pages_md.append(f"## Page {page_num}\n\n" + "\n\n".join(page_md_parts))
+                text_page_count += 1
+
+    result = "\n\n".join(all_pages_md)
+    print(f"[Convert]   转换完成: {len(result)} 字符，文字页={text_page_count}/{total}")
+
+    # ── 关键修复：图片型 PDF 降级到 OCR ──────────────────────────
+    # 如果整个 PDF 没有提取到任何文字（纯扫描件），且配置了 OCR 视觉模型，
+    # 自动降级到逐页 OCR，避免返回空内容导致上传失败
+    if not result.strip() and OCR_MODEL:
+        print(f"[Convert]   未提取到文字，判断为图片型 PDF，启动 OCR 降级...")
+        result = _ocr_pdf_with_vision(pdf_path)
+
+    return result
+
+
+
+
+def _fix_broken_tables(md_path, pdf_path: str = None) -> None:
+    """
+    修复文档转换后表格格式错乱的问题（主要针对非 PDF 文件）。
+    PDF 文件已由 _convert_pdf_smart 用 pdfplumber 精确处理，无需此函数修复。
+
+    通用检测策略：找到连续的无 | 分隔符的多列文字行（疑似乱格的表格区域），
+    调用 LLM 修复为标准 Markdown 表格格式。
+    不针对特定词语，适用于任何格式混乱的对比型表格。
+    """
+    from pathlib import Path as _Path
+    import re as _re
+
+    md_path = _Path(md_path)
+    content = md_path.read_text(encoding="utf-8")
+
+    # 通用检测：找连续的、看起来像多列数据但没有 | 的文字块
+    # 特征：3行以上连续行，每行有多个空白分隔的"列"，且整块里没有 | 分隔符
+    # 同时至少有一行像"标题行"（含有重复的模式，如 A B C / 一 二 三 / 选项1 选项2）
+    pattern = _re.compile(
+        # 匹配连续 5 行以上的无 | 的文本块
+        r'((?:(?!\|).+\n){5,})',
+        _re.MULTILINE
+    )
+    matches = [m for m in pattern.finditer(content)
+               # 过滤：块内至少有一行看起来有多列（含 2+ 个多空格分隔）
+               if _re.search(r'\S+\s{2,}\S+\s{2,}\S+', m.group(1))]
+
+    if not matches:
+        return
+
+    try:
+        from config import CHAT_MODEL, OLLAMA_BASE_URL, THINKING
+        import httpx as _httpx
+
+        fixed_content = content
+        for m in reversed(matches):
+            broken_block = m.group(1).strip()
+            if not broken_block:
+                continue
+            print(f"[Convert] LLM 修复疑似混乱表格 ({len(broken_block)} 字符)")
+            prompt = (
+                "/no_think\n"
+                "以下是从文档中提取的文本块，疑似是一张格式混乱的表格。"
+                "原文档中可能有合并单元格、跨行内容等，导致提取后列数据错位。\n\n"
+                "如果它确实是表格，请修复为标准 Markdown 表格（使用 | 分隔列），"
+                "合并单元格的值展开到每一行；\n"
+                "如果它不是表格而是普通段落，原样返回。\n\n"
+                f"文本块：\n{broken_block}\n\n"
+                "只返回修复结果，不要解释："
+            )
+            resp = _httpx.post(
+                f"{OLLAMA_BASE_URL}/api/generate",
+                json={
+                    "model": CHAT_MODEL, "prompt": prompt, "stream": False,
+                    "think": THINKING, "options": {"temperature": 0, "num_ctx": 8192},
+                },
+                timeout=120,
+            )
+            resp.raise_for_status()
+            fixed_block = resp.json().get("response", "").strip()
+            # 只有返回结果包含 | 且比原文更结构化才替换
+            if fixed_block and '|' in fixed_block and fixed_block != broken_block:
+                fixed_content = (fixed_content[:m.start()] + fixed_block +
+                                 "\n\n" + fixed_content[m.end():])
+                print(f"[Convert] LLM 修复表格: {md_path.name}")
+
+        if fixed_content != content:
+            md_path.write_text(fixed_content, encoding="utf-8")
+            print(f"[Convert] 表格后处理完成: {md_path.name}")
+
+    except Exception as e:
+        print(f"[Convert] 表格后处理跳过（{e}）")
+
 
 def convert_to_md(src_path: str) -> str:
     """
@@ -79,39 +387,35 @@ def convert_to_md(src_path: str) -> str:
     if md_path.exists():
         return str(md_path)
 
-    # ── 优先：Python API（支持 OCR）────────────────────────────
+    # ── 优先：Python API────────────────────────────────────────
+    # 策略：
+    #   - 非 PDF 文件：普通转换 + 表格后处理
+    #   - PDF 文件：逐页判断，图片页用 OCR 视觉模型，文字页直接提取，最后合并 + 表格后处理
     try:
         from markitdown import MarkItDown
 
-        if OCR_MODEL:
-            # 使用 Ollama 本地视觉模型做 OCR
-            try:
-                from openai import OpenAI
-                ollama_client = OpenAI(
-                    base_url=f"{OLLAMA_BASE_URL}/v1",
-                    api_key="ollama",  # Ollama 不校验 key，填任意值即可
-                )
-                md_converter = MarkItDown(
-                    enable_plugins=True,
-                    llm_client=ollama_client,
-                    llm_model=OCR_MODEL,
-                )
-                print(f"[Convert] 使用 OCR 模型 {OCR_MODEL} 转换: {src.name}")
-            except ImportError:
-                # openai 或 markitdown-ocr 未安装，回退到普通转换
-                print(f"[Convert] markitdown-ocr 或 openai 未安装，跳过 OCR")
-                md_converter = MarkItDown()
+        suffix = src.suffix.lower()
+
+        if suffix == ".pdf" and OCR_MODEL:
+            text = _convert_pdf_smart(str(src))
+            if not text.strip():
+                # _convert_pdf_smart 内部已尝试 OCR 降级，仍为空则真的无内容
+                raise RuntimeError("PDF 转换返回空内容（pdfplumber 和 OCR 均未提取到文字）")
         else:
             md_converter = MarkItDown()
-
-        result = md_converter.convert(str(src))
-        text = result.text_content or ""
-
-        if not text.strip():
-            raise RuntimeError("markitdown Python API 返回空内容")
+            print(f"[Convert] 转换: {src.name}")
+            result = md_converter.convert(str(src))
+            text = result.text_content or ""
+            if not text.strip():
+                raise RuntimeError("markitdown Python API 返回空内容")
 
         md_path.write_text(text, encoding="utf-8")
-        print(f"[Convert] Python API 转换成功: {src.name} → {md_path.name}")
+        print(f"[Convert] 转换成功: {src.name} → {md_path.name}")
+        # 后处理：用 pdfplumber 精确修复表格（降级用 LLM）
+        if src.suffix.lower() == ".pdf":
+            _fix_broken_tables(md_path, pdf_path=str(src))
+        else:
+            _fix_broken_tables(md_path)
         return str(md_path)
 
     except Exception as e:
@@ -132,6 +436,10 @@ def convert_to_md(src_path: str) -> str:
         if not md_path.exists():
             raise RuntimeError("markitdown CLI 未生成输出文件")
         print(f"[Convert] CLI 转换成功: {src.name} → {md_path.name}")
+        if src.suffix.lower() == ".pdf":
+            _fix_broken_tables(md_path, pdf_path=str(src))
+        else:
+            _fix_broken_tables(md_path)
         return str(md_path)
     except FileNotFoundError:
         raise RuntimeError("markitdown 命令未找到，请先安装: pip install markitdown")

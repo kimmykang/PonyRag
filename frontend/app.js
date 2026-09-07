@@ -29,6 +29,7 @@ const state = {
     sessionId: crypto.randomUUID().slice(0, 8), // 会话 ID，用于后端关联多轮对话（前 8 位即可）
     chatHistory: [], // 历史对话记录，格式 [["user", "内容"], ["assistant", "内容"]]
     isProcessing: false, // 是否正在处理聊天请求（防止重复提交）
+    abortController: null, // 当前流式请求的 AbortController
     documents: [], // 已上传的文档列表（从后端获取）
     connected: false, // 后端连接状态
     currentKbId: 'knowledge_base', // 当前选中的知识库 ID
@@ -1170,8 +1171,35 @@ async function loadStats() {
 async function handleChatSubmit(e) {
     e.preventDefault();
 
+    // ── 如果正在处理，则停止 ──────────────────────────────────────
+    if (state.isProcessing) {
+        // 1. 通知后端停止 Ollama 推理（释放 GPU）
+        if (state.sessionId) {
+            fetch(`${API_BASE}/api/chat/abort`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    session_id: state.sessionId
+                }),
+            }).catch(() => {}); // 忽略错误，前端停止优先
+        }
+        // 2. 中止前端 fetch 流
+        if (state.abortController) {
+            state.abortController.abort();
+            state.abortController = null;
+        }
+        // 3. 立即重置状态
+        state.isProcessing = false;
+        toggleSendButton();
+        const typing = document.getElementById('typing-indicator');
+        if (typing) typing.remove();
+        return;
+    }
+
     const question = dom.questionInput.value.trim();
-    if (!question || state.isProcessing) return;
+    if (!question) return;
 
     // 隐藏 welcome
     dom.welcomeMessage.style.display = 'none';
@@ -1180,7 +1208,6 @@ async function handleChatSubmit(e) {
     addMessage('user', question, [], new Date().toISOString());
     dom.questionInput.value = '';
     autoResizeTextarea(dom.questionInput);
-    toggleSendButton();
 
     // 添加到历史
     state.chatHistory.push(['user', question]);
@@ -1190,8 +1217,9 @@ async function handleChatSubmit(e) {
         state.chatHistory = state.chatHistory.slice(-20);
     }
 
-    // 显示加载
+    // 显示加载，切换按钮为停止状态
     state.isProcessing = true;
+    toggleSendButton();
     const typingEl = addTypingIndicator();
 
     // 根据通用设置决定使用流式还是非流式接口
@@ -1230,11 +1258,13 @@ async function handleChatSubmit(e) {
 
     // ── 流式：逐 token 实时渲染 ────────────────────────────────
     try {
+        state.abortController = new AbortController();
         const res = await fetch(`${API_BASE}/api/chat/stream`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
             },
+            signal: state.abortController.signal,
             body: JSON.stringify({
                 question: question,
                 session_id: state.sessionId,
@@ -1293,15 +1323,17 @@ async function handleChatSubmit(e) {
                 } else if (event.done) {
                     sources = event.sources || [];
                     sessionId = event.session_id || sessionId;
+                    const usage = event.usage || null;
                     // 只有有内容时才覆盖（避免 error 后的 done 清空错误消息）
                     if (contentDiv && fullAnswer) {
                         contentDiv.innerHTML = renderMarkdown(fullAnswer);
                         appendSources(contentDiv, sources);
+                        if (usage) appendUsage(contentDiv, usage);
                     } else if (!contentDiv) {
                         // done 但没有任何 token（暂无内容场景）
                         typingEl.remove();
                         const answer = event.answer || '暂无相关内容';
-                        addMessage('assistant', answer, sources);
+                        addMessage('assistant', answer, sources, null, usage);
                         fullAnswer = answer;
                     }
                     scrollToBottom();
@@ -1324,15 +1356,22 @@ async function handleChatSubmit(e) {
         state.chatHistory.push(['assistant', fullAnswer]);
 
     } catch (err) {
-        typingEl.remove();
-        addMessage('assistant', `请求出错: ${err.message}`);
+        // AbortError = 用户主动停止，不显示错误消息，保留已输出内容
+        if (err.name === 'AbortError') {
+            // 移除"思考中"气泡，保留已输出的内容气泡
+            if (typingEl.isConnected) typingEl.remove();
+        } else {
+            if (typingEl.isConnected) typingEl.remove();
+            addMessage('assistant', `请求出错: ${err.message}`);
+        }
     } finally {
+        state.abortController = null;
         state.isProcessing = false;
         toggleSendButton();
     }
 }
 
-function addMessage(role, content, sources = [], createdAt = null) {
+function addMessage(role, content, sources = [], createdAt = null, usage = null) {
     const msgDiv = document.createElement('div');
     msgDiv.className = `message ${role}`;
 
@@ -1353,20 +1392,9 @@ function addMessage(role, content, sources = [], createdAt = null) {
     // 引用来源（只有 AI 回复才有，过滤掉得分为0的扩展chunk）
     const visibleSources = (sources || []).filter(s => s.score > 0);
     if (visibleSources.length > 0) {
-        const sourcesDiv = document.createElement('div');
-        sourcesDiv.className = 'sources';
-        sourcesDiv.innerHTML = `
-            <div class="source-title">${t('chat.sources')}</div>
-            ${visibleSources.map(s => `
-                <div class="source-item">
-                    <span>#${s.index}</span>
-                    <span>${escapeHtml(s.source)}</span>
-                    <span class="source-score">${t('chat.score')}${s.score}</span>
-                </div>
-            `).join('')}
-        `;
-        contentDiv.appendChild(sourcesDiv);
+        contentDiv.appendChild(buildSourcesDiv(visibleSources));
     }
+    if (usage) appendUsage(contentDiv, usage);
 
     msgDiv.appendChild(avatar);
     msgDiv.appendChild(contentDiv);
@@ -1443,19 +1471,89 @@ function addStreamingMessage() {
 function appendSources(contentDiv, sources) {
     const visibleSources = (sources || []).filter(s => s.score > 0);
     if (!visibleSources.length) return;
+    contentDiv.appendChild(buildSourcesDiv(visibleSources));
+}
+
+// 构建折叠式参考来源 DOM
+function buildSourcesDiv(visibleSources) {
     const sourcesDiv = document.createElement('div');
     sourcesDiv.className = 'sources';
-    sourcesDiv.innerHTML = `
-        <div class="source-title">${t('chat.sources')}</div>
-        ${visibleSources.map(s => `
-            <div class="source-item">
-                <span>#${s.index}</span>
-                <span>${escapeHtml(s.source)}</span>
-                <span class="source-score">${t('chat.score')}${s.score}</span>
-            </div>
-        `).join('')}
+
+    // 标题行（含展开/收起按钮）
+    const titleRow = document.createElement('div');
+    titleRow.className = 'source-title';
+
+    const titleText = document.createElement('span');
+    titleText.textContent = t('chat.sources');
+
+    const toggleBtn = document.createElement('button');
+    toggleBtn.className = 'source-toggle-btn';
+    toggleBtn.setAttribute('aria-label', '展开参考来源');
+
+    titleRow.appendChild(titleText);
+    titleRow.appendChild(toggleBtn);
+    sourcesDiv.appendChild(titleRow);
+
+    // 第一条：始终显示
+    const firstItem = document.createElement('div');
+    firstItem.className = 'source-item';
+    firstItem.innerHTML = `
+        <span class="source-index">#${visibleSources[0].index}</span>
+        <span class="source-name">${escapeHtml(visibleSources[0].source)}</span>
+        <span class="source-score">${t('chat.score')}${visibleSources[0].score}</span>
     `;
-    contentDiv.appendChild(sourcesDiv);
+    sourcesDiv.appendChild(firstItem);
+
+    // 其余条目：默认隐藏
+    const moreWrap = document.createElement('div');
+    moreWrap.className = 'source-more';
+
+    visibleSources.slice(1).forEach(s => {
+        const item = document.createElement('div');
+        item.className = 'source-item';
+        item.innerHTML = `
+            <span class="source-index">#${s.index}</span>
+            <span class="source-name">${escapeHtml(s.source)}</span>
+            <span class="source-score">${t('chat.score')}${s.score}</span>
+        `;
+        moreWrap.appendChild(item);
+    });
+    sourcesDiv.appendChild(moreWrap);
+
+    // 没有额外条目时隐藏按钮
+    if (visibleSources.length <= 1) {
+        toggleBtn.style.display = 'none';
+    } else {
+        const extraCount = visibleSources.length - 1;
+        toggleBtn.textContent = `+${extraCount}`;
+        toggleBtn.title = `展开查看全部 ${visibleSources.length} 条来源`;
+
+        toggleBtn.addEventListener('click', () => {
+            const expanded = moreWrap.classList.toggle('source-more--open');
+            toggleBtn.textContent = expanded ? '收起' : `+${extraCount}`;
+            toggleBtn.title = expanded ? '收起' : `展开查看全部 ${visibleSources.length} 条来源`;
+            toggleBtn.classList.toggle('source-toggle-btn--open', expanded);
+        });
+    }
+
+    return sourcesDiv;
+}
+
+// 在消息气泡末尾追加 token 用量统计
+function appendUsage(contentDiv, usage) {
+    if (!usage) return;
+    const {
+        prompt_tokens = 0, completion_tokens = 0, total_tokens = 0
+    } = usage;
+    const usageDiv = document.createElement('div');
+    usageDiv.className = 'token-usage';
+    usageDiv.innerHTML =
+        `<span class="token-usage-item">${t('chat.promptTokens') || '输入'} <b>${prompt_tokens}</b> tokens</span>` +
+        `<span class="token-usage-sep">·</span>` +
+        `<span class="token-usage-item">${t('chat.completionTokens') || '输出'} <b>${completion_tokens}</b> tokens</span>` +
+        `<span class="token-usage-sep">·</span>` +
+        `<span class="token-usage-item">${t('chat.totalTokens') || '合计'} <b>${total_tokens}</b> tokens</span>`;
+    contentDiv.appendChild(usageDiv);
 }
 
 function scrollToBottom() {
@@ -1469,7 +1567,25 @@ function scrollToBottom() {
 // ============================================================
 
 function toggleSendButton() {
-    dom.sendBtn.disabled = !dom.questionInput.value.trim() || state.isProcessing;
+    const btn = dom.sendBtn;
+    const iconSend = btn.querySelector('.icon-send');
+    const iconStop = btn.querySelector('.icon-stop');
+
+    if (state.isProcessing) {
+        // 变为停止按钮
+        btn.disabled = false;
+        btn.classList.add('send-btn--stop');
+        btn.title = '停止生成';
+        if (iconSend) iconSend.style.display = 'none';
+        if (iconStop) iconStop.style.display = 'block';
+    } else {
+        // 恢复发送按钮
+        btn.disabled = !dom.questionInput.value.trim();
+        btn.classList.remove('send-btn--stop');
+        btn.title = '发送';
+        if (iconSend) iconSend.style.display = 'block';
+        if (iconStop) iconStop.style.display = 'none';
+    }
 }
 
 function autoResizeTextarea(textarea) {
@@ -1510,7 +1626,6 @@ function _updateChunkParamVisibility(method) {
     if (sizeField) sizeField.style.display = '';
     if (overlapField) overlapField.style.display = '';
 }
-
 // ── 主题管理 ────────────────────────────────────────────────
 /**
  * 应用主题：立即切换 data-theme，持久化到 localStorage

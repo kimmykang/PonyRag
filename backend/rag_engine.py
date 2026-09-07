@@ -16,6 +16,7 @@ RAG 完整链路：
 """
 from typing import List, Optional
 
+import threading
 import httpx
 from langchain_ollama import OllamaLLM, OllamaEmbeddings
 from langchain_core.documents import Document
@@ -509,7 +510,7 @@ class RagEngine:
             }
 
     def stream_answer_with_docs(self, question: str, documents: List[Document], chat_history: Optional[List[tuple]] = None,
-                                 collection_names: List[str] = None):
+                                 collection_names: List[str] = None, abort_event=None):
         """
         流式生成回答（SSE 版）。
         直接调用 Ollama /api/generate 流式接口，绕过 LangChain 缓冲问题。
@@ -556,10 +557,39 @@ class RagEngine:
 
         # 直接调用 Ollama /api/generate 流式接口（绕过 LangChain 缓冲）
         full_answer = []
+        prompt_tokens = 0
+        completion_tokens = 0
+        _httpx_client = None  # 保存 client 引用，供 abort 时强制关闭
         try:
             import config as _cfg
             from config import THINKING
+
+            # 启动一个监控线程：一旦 abort_event 触发，立即关闭 httpx client
+            # 这样即使 iter_lines() 阻塞在 prefill 阶段，也能被强制中断
+            def _abort_watcher():
+                if abort_event:
+                    abort_event.wait()  # 阻塞直到 event 被 set
+                    if _httpx_client is not None:
+                        print(f"[RAG] abort watcher: force closing httpx client")
+                        try:
+                            _httpx_client.close()
+                        except Exception:
+                            pass
+
+            watcher = threading.Thread(target=_abort_watcher, daemon=True)
+            watcher.start()
+
             with httpx.Client(transport=httpx.HTTPTransport(), timeout=300) as client:
+                _httpx_client = client
+
+                # 如果在建立连接前就已经 abort，直接退出
+                if abort_event and abort_event.is_set():
+                    print(f"[RAG] aborted before Ollama request")
+                    yield {"done": True, "sources": sources, "has_knowledge": True,
+                           "answer": "".join(full_answer).strip(),
+                           "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}}
+                    return
+
                 with client.stream(
                     "POST",
                     f"{_cfg.OLLAMA_BASE_URL}/api/generate",
@@ -578,6 +608,10 @@ class RagEngine:
                     token_count = 0
                     raw_count = 0
                     for line in resp.iter_lines():
+                        # 每次读到新行都检查 abort
+                        if abort_event and abort_event.is_set():
+                            print(f"[RAG] stream aborted by client, closing Ollama connection")
+                            break
                         if not line:
                             continue
                         try:
@@ -585,22 +619,18 @@ class RagEngine:
                         except Exception:
                             continue
                         raw_count += 1
-                        if raw_count <= 3:  # 打印前3个chunk看结构
+                        if raw_count <= 3:
                             print(f"[RAG] raw chunk[{raw_count}]: {str(chunk)[:150]}")
-                        if not line:
-                            continue
-                        try:
-                            chunk = _json.loads(line)
-                        except Exception:
-                            continue
                         token = chunk.get("response", "")
                         if token:
                             full_answer.append(token)
                             token_count += 1
                             yield {"token": token}
                         if chunk.get("done"):
-                            print(f"[RAG] stream done, total_tokens={token_count}, answer_len={len(''.join(full_answer))}")
-                            # 调试：打印原始chunk内容
+                            prompt_tokens     = chunk.get("prompt_eval_count", 0)
+                            completion_tokens = chunk.get("eval_count", 0)
+                            print(f"[RAG] stream done, output_tokens={token_count}, "
+                                  f"prompt_tokens={prompt_tokens}, completion_tokens={completion_tokens}")
                             if token_count == 0:
                                 print(f"[RAG] done chunk keys: {list(chunk.keys())}, sample: {str(chunk)[:200]}")
                             break
@@ -610,6 +640,11 @@ class RagEngine:
                 "sources":       sources,
                 "has_knowledge": True,
                 "answer":        "".join(full_answer).strip(),
+                "usage": {
+                    "prompt_tokens":     prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens":      prompt_tokens + completion_tokens,
+                },
             }
         except Exception as e:
             error_msg = str(e)

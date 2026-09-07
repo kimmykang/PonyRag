@@ -237,11 +237,16 @@
                             <label class="upload-chunk-label" data-i18n="docs.chunkMethod">切分方式</label>
                             <select id="uploadChunkMethod" class="upload-chunk-select">
                                 <option value="" data-i18n="docs.chunkGlobal">— 使用全局设置 —</option>
+                                <option value="auto">🤖 自动检测（LLM 推荐）</option>
                                 <option value="fixed" data-i18n="chunk.fixed.desc.short">✂️ 固定切分 · 适合：纯文本、日志、数据导出</option>
                                 <option value="recursive" data-i18n="chunk.recursive.desc.short">🔀 递归切分（推荐）· 适合：通用文档</option>
                                 <option value="markdown" data-i18n="chunk.markdown.desc.short">📑 标题树切分 · 适合：保险条款、产品手册</option>
                                 <option value="semantic" data-i18n="chunk.semantic.desc.short">🧠 语义切分（较慢）· 适合：文章、报告、书籍</option>
                             </select>
+                            <!-- 自动检测结果提示 -->
+                            <div id="autoDetectResult" style="display:none; margin-top:6px; font-size:12px; color:var(--primary);">
+                                🤖 <span id="autoDetectText"></span>
+                            </div>
                         </div>
                         <div class="upload-chunk-row" id="uploadSizeRow">
                             <label class="upload-chunk-label">
@@ -298,6 +303,7 @@
                 <div class="settings-field">
                     <label style="font-size:0.85rem; font-weight:500;" data-i18n="docs.chunkMethod">切分方式</label>
                     <select id="rechunkMethod" class="upload-chunk-select" style="margin-top:6px;" onchange="updateRechunkSizeVisibility()">
+                        <option value="auto" data-i18n="docs.chunkAuto">🤖 自动检测（LLM 推荐）</option>
                         <option value="fixed" data-i18n="chunk.fixed.desc.short">✂️ 固定切分 · 适合：纯文本、日志</option>
                         <option value="recursive" selected data-i18n="chunk.recursive.desc.short">🔀 递归切分（推荐）· 适合：通用文档</option>
                         <option value="markdown" data-i18n="chunk.markdown.desc.short">📑 标题树切分 · 适合：保险条款、产品手册</option>
