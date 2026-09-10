@@ -30,6 +30,7 @@
 - 📚 **多格式支持** — PDF、Word、Excel、PowerPoint、Markdown、TXT 自动解析
 - 🧠 **智能检索** — 向量检索 + Rerank 精排 + 标题树章节扩展，确保答案准确性
 - 💬 **多轮对话** — 支持上下文记忆的连续对话
+- 🗂️ **多会话管理** — 侧边栏会话列表，按日期分组，支持新建、切换、重命名、删除会话
 - 🗄️ **多知识库管理** — 创建、启用/禁用多个独立知识库
 - 🎨 **现代界面** — 响应式 Web UI，支持移动端和桌面端，Markdown 表格渲染
 - ⚡ **高性能** — ChromaDB 向量存储，毫秒级检索响应
@@ -119,6 +120,15 @@
 - ✅ **流式输出** — 逐 token 实时渲染，告别等待
 - ✅ **停止生成** — 点击停止按钮立即中断 Ollama 推理，释放 GPU，无需等待任务结束
 - ✅ **Token 用量显示** — 每条回答底部显示输入 / 输出 / 合计 tokens
+
+#### 3.1 多会话管理
+- ✅ **侧边栏会话列表** — 历史对话按「今天 / 7天内 / 30天内 / 更早」自动分组展示
+- ✅ **新建对话** — 点击「开启新的对话」按钮随时开启全新会话
+- ✅ **一键切换** — 点击任意历史会话即刻加载对应消息记录
+- ✅ **重命名会话** — 悬停显示操作按钮，支持自定义会话标题（最长 50 字）
+- ✅ **删除会话** — 单条删除，删除当前会话后自动跳转到最近一条或新建
+- ✅ **持久化存储** — 每条会话独立存储在 SQLite，重启后完整恢复
+- ✅ **中英双语** — 会话列表及所有操作文字均支持中 / 英切换
 
 #### 4. 模型管理
 - ✅ 在线切换对话模型
@@ -340,6 +350,10 @@ ponyrag/
 | `GET` | `/api/stats` | 获取统计信息 |
 | `GET` | `/api/model-status` | 获取模型加载状态 |
 | `POST` | `/api/config/models` | 切换模型配置 |
+| `GET` | `/api/sessions` | 获取所有会话列表 |
+| `GET` | `/api/sessions/{id}/messages` | 获取指定会话的消息记录 |
+| `DELETE` | `/api/sessions/{id}` | 删除指定会话 |
+| `PUT` | `/api/sessions/{id}/title` | 重命名会话标题 |
 
 ### 🛠️ 常见问题
 
@@ -393,6 +407,7 @@ Ollama 首次加载大模型需要时间（30秒-几分钟），请耐心等待�
 - [x] 文档上传与自动解析
 - [x] 向量检索 + Rerank
 - [x] 多轮对话历史
+- [x] **多会话管理** — 侧边栏会话列表，新建/切换/重命名/删除，按日期分组
 - [x] 模型热切换
 - [x] 参数动态调整（TOP-K、num_ctx、context_limit 等）
 - [x] 图片型 PDF OCR 支持（基于 Ollama 视觉模型）
@@ -448,25 +463,156 @@ Ollama 首次加载大模型需要时间（30秒-几分钟），请耐心等待�
 - 📚 **Multi-format Support** — Auto-parsing for PDF, Word, Excel, PowerPoint, Markdown, TXT
 - 🧠 **Smart Retrieval** — Vector search + Rerank + header-tree section expansion for accurate answers
 - 💬 **Multi-turn Dialogue** — Context-aware conversations with memory
+- 🗂️ **Multi-session Management** — Sidebar session list with date grouping; create, switch, rename, and delete sessions
 - 🗄️ **Multiple Knowledge Bases** — Create, enable/disable multiple independent knowledge bases
-- 🎨 **Modern UI** — Responsive web interface, Markdown table rendering
-- ⚡ **High Performance** — ChromaDB vector storage with millisecond-level response
+- 🎨 **Modern UI** — Responsive web interface supporting mobile and desktop, Markdown table rendering
+- ⚡ **High Performance** — ChromaDB vector storage with millisecond-level retrieval
 - 🔄 **Hot Model Swapping** — Switch LLM/Embedding/Rerank/OCR models on-the-fly
 - 🌊 **Streaming Output** — Enabled by default, real-time token-by-token rendering via SSE
-- 🛑 **Stop Generation** — Click stop to immediately abort Ollama inference and free GPU, no need to wait for completion
+- 🛑 **Stop Generation** — Click stop to immediately abort Ollama inference and free GPU
 - 📊 **Token Usage Display** — Shows input / output / total tokens at the bottom of each response
 - 🤔 **Thinking Mode** — Toggle model reasoning mode, compatible with qwen3 and other reasoning models
 
-### 🏗️ Tech Stack
+### 🏗️ Architecture
 
+```
+User Interaction
+  ↓
+┌─────────────────────────────────────────┐
+│  Frontend (Vanilla JavaScript)          │
+│  - Chat interface (index.html)          │
+│  - Knowledge base mgmt (knowledge.html) │
+└───────────────┬─────────────────────────┘
+                │ REST API
+┌───────────────▼─────────────────────────┐
+│  Backend (FastAPI + Python)             │
+│  ┌─────────────────────────────────┐    │
+│  │  RAG Engine (rag_engine.py)    │    │
+│  │  - Vector retrieval             │    │
+│  │  - Rerank scoring               │    │
+│  │  - LLM answer generation        │    │
+│  └─────────────────────────────────┘    │
+│  ┌─────────────────────────────────┐    │
+│  │  Document Processor             │    │
+│  │  - Markitdown parsing           │    │
+│  │  - Text chunking                │    │
+│  └─────────────────────────────────┘    │
+│  ┌─────────────────────────────────┐    │
+│  │  Knowledge Base Manager         │    │
+│  │  - Multi-KB metadata            │    │
+│  │  - SQLite storage               │    │
+│  └─────────────────────────────────┘    │
+└───────────────┬─────────────────────────┘
+                │
+┌───────────────▼─────────────────────────┐
+│  ChromaDB (Vector Database)             │
+│  - Independent collection per KB        │
+│  - Local persistent storage             │
+└─────────────────────────────────────────┘
+                │
+┌───────────────▼─────────────────────────┐
+│  Ollama (Local LLM Inference)           │
+│  - Chat model                           │
+│  - Embedding model                      │
+│  - Rerank model                         │
+└─────────────────────────────────────────┘
+```
+
+**Tech Stack:**
 - **Backend**: FastAPI + LangChain + Python 3.11+
 - **Vector Database**: ChromaDB (local persistence)
 - **LLM**: Ollama (supports Qwen, Llama, etc.)
-- **Document Parser**: Markitdown
-- **Frontend**: Vanilla JavaScript + Marked.js
+- **Document Parser**: Markitdown (multi-format support)
+- **Frontend**: Vanilla JavaScript
 - **Data Storage**: SQLite (chat history + knowledge base metadata)
 
-### � Quick Start
+### 🎯 Features
+
+#### 1. Knowledge Base Management
+- ✅ Create / edit / delete knowledge bases
+- ✅ Enable / disable knowledge bases
+- ✅ View document count and vector count statistics
+- ✅ Independent vector space per knowledge base
+
+#### 2. Document Management
+- ✅ Drag-and-drop or click to upload
+- ✅ Auto format conversion (PDF/Word → Markdown)
+- ✅ Batch delete documents
+- ✅ Real-time indexing progress display
+- ✅ Supported formats: PDF, DOCX, XLSX, PPTX, TXT, MD
+- ✅ **Index status persistence** — Upload success/failure written to DB; status remains correct after reopening
+- ✅ **Failure reason tooltip** — Hover over a "Failed" badge to see the specific error
+- ✅ **Column sorting** — Click Filename / Chunk type / Upload time / Status headers to sort ascending or descending
+- ✅ **File search** — Real-time filename filter in the toolbar; shows a hint when no results match
+- ✅ **In-panel scroll** — Document panel has a fixed height; content scrolls inside without page-level scrollbars
+
+#### 3. Smart Q&A
+- ✅ Accurate answers grounded in your knowledge base
+- ✅ Reference sources with relevance scores
+- ✅ Select a specific KB or search all enabled KBs
+- ✅ Markdown rendering (code highlight, tables, etc.)
+- ✅ Multi-turn context memory
+- ✅ **Streaming output** — Token-by-token real-time rendering
+- ✅ **Stop generation** — Immediately aborts Ollama inference and frees GPU
+- ✅ **Token usage** — Input / output / total token count shown below each response
+
+#### 3.1 Multi-session Management
+- ✅ **Sidebar session list** — History grouped by Today / Last 7 days / Last 30 days / Older
+- ✅ **New chat** — Click "New Chat" to start a fresh session at any time
+- ✅ **One-click switch** — Click any past session to instantly load its messages
+- ✅ **Rename** — Hover to reveal action buttons; supports custom titles up to 50 characters
+- ✅ **Delete** — Delete a single session; automatically switches to the latest or creates a new one
+- ✅ **Persistent storage** — Each session stored independently in SQLite; fully restored on restart
+- ✅ **Bilingual** — All session UI text switches between Chinese and English
+
+#### 4. Model Management
+- ✅ Switch chat model online
+- ✅ Switch Embedding model online (auto-rebuilds index)
+- ✅ Switch OCR vision model online — takes effect immediately, no restart needed
+- ✅ Adjust retrieval parameters (TOP-K, Rerank-TOP-K, etc.)
+- ✅ Adjust context window size (num_ctx), unit K, default 128K
+- ✅ Adjust max reference characters (context_limit), unit K, default 20K
+- ✅ Toggle Thinking mode (for qwen3 and other reasoning models)
+- ✅ Real-time model loading status
+
+#### 5. Chunking Methods
+
+Each document can have its own chunking method; a global default can be set in Parameters:
+
+| Method | How it works | Best for |
+|--------|-------------|---------|
+| 🤖 **Auto-detect** | LLM analyzes document structure and picks the best method | When unsure; saves manual judgment |
+| ✂️ **Fixed** | Splits strictly by character count, ignoring semantic boundaries | Unstructured plain text, logs, data exports |
+| 🔀 **Recursive** (default) | Splits progressively by punctuation/blank lines, balancing semantics and size | General documents; recommended default |
+| 📑 **Header-tree** | Splits by `#/##/###` heading levels, includes section path in each chunk | Structured docs (insurance terms, manuals, API docs) |
+| 🧠 **Semantic** | Uses Embedding similarity to detect paragraph boundaries (slower, variable chunk size) | Narrative text (news, reports, books) |
+
+#### 6. Smart PDF Conversion (pdfplumber)
+
+When uploading PDF files, the system uses **pdfplumber** to precisely extract tables, solving the misalignment issues caused by multi-column merged cells in raw PDFs:
+
+- **Merged cell expansion** — Span values are correctly filled into every row
+- **Table / body separation** — Table regions are identified precisely; non-table paragraphs and headings are extracted and merged separately
+- **Fast** — Pure local computation, no LLM call; completes in seconds (vs. 60–130 s for OCR)
+- **Graceful fallback** — Falls back to standard markitdown conversion if pdfplumber is unavailable
+
+#### 7. Frontend Markdown Table Rendering
+
+Markdown tables in AI responses (`| col1 | col2 |` format) are automatically rendered as styled HTML tables with:
+- Purple-highlighted header, alternating row colors, hover effect
+- Horizontal scroll for wide tables
+- Correct `<br>` line breaks inside cells
+
+#### 8. General Settings
+- ✅ **Theme** — Light / dark, takes effect instantly and persists across pages
+- ✅ **Streaming toggle** — Switch between token-by-token streaming and wait-for-complete-answer mode; **default on**
+- ✅ **Bilingual UI** — Chinese / English; click `EN`/`中` in the top bar or choose in General Settings; instant, no reload
+
+#### 9. Header-tree Smart Recall
+
+When a knowledge base uses header-tree chunking, the system detects the section heading of each retrieved chunk and includes all chunks from that section when sending context to the LLM. This ensures list-type questions ("what are all the…") return complete answers rather than partial results.
+
+### 📦 Quick Start
 
 #### Prerequisites
 
@@ -498,7 +644,7 @@ pip install markitdown-ocr openai
 
 Visit [https://ollama.com](https://ollama.com) to download and install Ollama
 
-Download recommended models (~15GB):
+Download recommended models (~15 GB):
 ```bash
 # Chat model
 ollama pull qwen3.6:27b
@@ -520,6 +666,11 @@ ollama pull qwen2.5vl:7b
 start.bat
 ```
 
+**Windows (Conda):**
+```bash
+"start for conda.bat"
+```
+
 **Linux/macOS:**
 ```bash
 chmod +x start.sh
@@ -528,36 +679,40 @@ chmod +x start.sh
 
 **5. Access the application**
 
-Browser will automatically open [http://localhost:8001](http://localhost:8001)
+The browser will automatically open [http://localhost:8001](http://localhost:8001)
 
 ### 📝 Usage
 
-#### Create Knowledge Base and Upload Documents
+#### Create a Knowledge Base and Upload Documents
 
 1. Click "Knowledge Base Management" in the top navigation
-2. Click "Create Knowledge Base" button, fill in name and description
+2. Click "Create Knowledge Base", fill in a name and description
 3. Click "Manage Documents" on the knowledge base card
-4. Drag and drop or click to upload PDF/Word/Excel files
-5. Wait for automatic document parsing and indexing
+4. Drag and drop or click to upload PDF / Word / Excel files
+5. Wait for automatic document parsing and indexing to complete
 
 #### Start Asking Questions
 
 1. Return to the home page (chat interface)
-2. Select a knowledge base in the left sidebar (or "All Enabled Knowledge Bases")
-3. Type your question in the input box and press Enter
-4. AI will generate answers based on knowledge base content and show references
+2. Click "New Chat" in the sidebar to start a fresh session, or click any past session to resume it
+3. Select a knowledge base from the "Select knowledge base" dropdown (or "All enabled knowledge bases")
+4. Type your question in the input box and press Enter
+5. The AI generates an answer grounded in the knowledge base and shows reference sources
 
-#### General Settings
+#### Model and Parameter Settings
 
 Click the ⚙️ icon in the top-right corner to open the settings panel:
 
-- **Theme**: Click the **☀️ Light** or **🌙 Dark** card to switch themes instantly — no save needed, persists across page reloads
-- **Streaming Output**: Toggle real-time token-by-token output. When on, answers stream as they are generated; when off, the complete answer appears at once (default: off)
-- **Language**: Click **🇨🇳 中文** or **🇬🇧 English** in General settings, or use the **`EN`/`中`** quick-toggle button in the top bar — takes effect instantly
+- **Model Settings** — Switch Chat / Embed / Rerank / OCR models
+- **Parameters** — Adjust TOP-K, Rerank-TOP-K, chunk size, etc.
+- **General Settings**:
+  - 🎨 **Theme** — Click **☀️ Light** or **🌙 Dark** to switch instantly; no save needed, persists on reload
+  - ⚡ **Streaming output** — On: answers stream token by token; Off: full answer appears at once (default: on)
+  - 🌐 **Language** — Click **🇨🇳 中文** or **🇬🇧 English** in settings, or use the **`EN`/`中`** quick-toggle in the top bar; takes effect instantly
 
 ### ⚙️ Configuration
 
-Edit `backend/.env` file to customize configuration:
+Edit `backend/.env` to customize:
 
 ```env
 # Ollama service URL
@@ -565,7 +720,7 @@ OLLAMA_BASE_URL=http://localhost:11434
 
 # Model configuration
 CHAT_MODEL=qwen3.6:27b                      # Chat model
-EMBED_MODEL=qwen3-embedding:4b               # Embedding model (⚠️ rebuild index on change)
+EMBED_MODEL=qwen3-embedding:4b               # Embedding model (⚠️ rebuilds index on change)
 RERANK_MODEL=qllama/bge-reranker-v2-m3:f16  # Rerank model
 OCR_MODEL=qwen2.5vl:7b                      # OCR vision model (leave empty to disable)
 
@@ -573,19 +728,143 @@ OCR_MODEL=qwen2.5vl:7b                      # OCR vision model (leave empty to d
 TOP_K=6                # Vector search recall count
 RERANK_TOP_K=4         # Top results after reranking
 CHUNK_SIZE=500         # Document chunk size (tokens)
-CHUNK_OVERLAP=50       # Chunk overlap size (tokens)
+CHUNK_OVERLAP=50       # Chunk overlap (tokens)
 CHUNK_METHOD=recursive # Chunking method: recursive | markdown | semantic | fixed
 CONTEXT_LIMIT=20000    # Max reference knowledge characters sent to LLM
-THINKING=false         # Model thinking mode (false to disable, for qwen3 etc.)
+THINKING=false         # Thinking mode (false = off; for qwen3 etc.)
 
-# Service configuration
+# Service
 HOST=0.0.0.0
 PORT=8001
 ```
 
-### 🔌 API Documentation
+### 📁 Project Structure
 
-Visit [http://localhost:8001/docs](http://localhost:8001/docs) after starting the service to view the complete Swagger API documentation.
+```
+ponyrag/
+├── backend/                    # Backend service
+│   ├── app.py                 # FastAPI main application
+│   ├── rag_engine.py          # RAG core engine
+│   ├── vector_store.py        # Vector database manager
+│   ├── document_processor.py  # Document processing module
+│   ├── knowledge_base.py      # Knowledge base manager
+│   ├── chat_history.py        # Chat history & session storage
+│   ├── config.py              # Configuration manager
+│   ├── requirements.txt       # Python dependencies
+│   ├── .env                   # Environment configuration
+│   ├── uploads/               # Document upload directory
+│   └── vector_db/             # ChromaDB data directory
+├── frontend/                   # Frontend
+│   ├── index.html             # Chat interface
+│   ├── knowledge.html         # Knowledge base management
+│   ├── app.js                 # Chat page logic
+│   ├── knowledge.js           # Knowledge base logic
+│   ├── i18n.js                # Internationalization (zh / en)
+│   └── style.css              # Global styles
+├── start.bat                   # Windows startup script
+├── start for conda.bat         # Conda environment startup script
+├── start.sh                    # Linux/macOS startup script
+└── README.md                   # Project documentation
+```
+
+### 🔌 API Reference
+
+Visit [http://localhost:8001/docs](http://localhost:8001/docs) after starting the service for the full Swagger UI.
+
+Key endpoints:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/chat` | Send a question and get an answer |
+| `POST` | `/api/chat/stream` | Streaming chat (SSE) |
+| `GET` | `/api/knowledge-bases` | List knowledge bases |
+| `POST` | `/api/knowledge-bases` | Create a knowledge base |
+| `PUT` | `/api/knowledge-bases/{kb_id}` | Update a knowledge base |
+| `DELETE` | `/api/knowledge-bases/{kb_id}` | Delete a knowledge base |
+| `POST` | `/api/upload` | Upload a document |
+| `GET` | `/api/documents` | List documents |
+| `DELETE` | `/api/documents/{filename}` | Delete a document |
+| `GET` | `/api/stats` | Get statistics |
+| `GET` | `/api/model-status` | Get model loading status |
+| `POST` | `/api/config/models` | Switch model configuration |
+| `GET` | `/api/sessions` | List all chat sessions |
+| `GET` | `/api/sessions/{id}/messages` | Get messages for a session |
+| `DELETE` | `/api/sessions/{id}` | Delete a session |
+| `PUT` | `/api/sessions/{id}/title` | Rename a session |
+
+### 🛠️ FAQ
+
+**Q: Models stuck on "Loading" after startup?**
+
+Ollama needs time to load large models (30 seconds to a few minutes) on first run. Monitor progress in the Ollama terminal. Each model in the sidebar has a reload button for manual retry after a timeout.
+
+**Q: Getting "No relevant content found in knowledge base"?**
+
+- Confirm documents have been uploaded and the vector entry count is > 0
+- Check that the knowledge base is enabled
+- If you just switched the Embedding model, wait for re-indexing to finish
+
+**Q: How do I handle scanned PDFs / image-only documents?**
+
+1. Install OCR dependencies: `pip install markitdown-ocr openai`
+2. Pull a vision model in Ollama: `ollama pull qwen2.5vl:7b`
+3. Select that model in the "OCR Model" dropdown in Settings and save
+4. Re-upload the PDF; the system will automatically extract text from images
+
+**Q: How can I speed up retrieval?**
+
+1. Lower TOP_K and RERANK_TOP_K
+2. Use a smaller model (e.g. qwen2.5:7b)
+3. Run Ollama with a GPU
+
+**Q: What document formats are supported?**
+
+PDF, DOCX, XLSX, PPTX, TXT, MD
+
+**Q: Dimension mismatch error after switching Embedding model?**
+
+Different models have different output dimensions. The system auto-detects this, clears the old vector store, and re-indexes on restart. ⚠️ Avoid switching Embedding models frequently.
+
+### ⚡ Performance Tuning
+
+| RAM | Recommended model combo | Use case |
+|-----|------------------------|---------|
+| 16 GB | qwen2.5:7b + qwen3-embedding:4b | Personal use |
+| 32 GB | qwen3.6:27b + qwen3-embedding:4b | Production |
+| 64 GB+ | qwen3.6:27b + qwen3-embedding:8b | Best quality |
+
+**TOP_K tuning:**
+- Accuracy first: `TOP_K=10, RERANK_TOP_K=6`
+- Balanced (recommended): `TOP_K=6, RERANK_TOP_K=4`
+- Speed first: `TOP_K=3, RERANK_TOP_K=2`
+
+### 🚧 Roadmap
+
+- [x] Multiple knowledge bases
+- [x] Document upload and auto-parsing
+- [x] Vector retrieval + Rerank
+- [x] Multi-turn chat history
+- [x] **Multi-session management** — sidebar list, new/switch/rename/delete, date-grouped
+- [x] Hot model swapping
+- [x] Dynamic parameter adjustment (TOP-K, num_ctx, context_limit, etc.)
+- [x] Scanned PDF OCR (via Ollama vision models)
+- [x] Streaming output (SSE token-by-token, on by default)
+- [x] Stop generation (immediately aborts Ollama inference, frees GPU)
+- [x] Dark / light theme
+- [x] Header-tree chunking + complete section recall (for list-type questions)
+- [x] Thinking mode toggle (for qwen3 and other reasoning models)
+- [x] Frontend Markdown table rendering
+- [x] Per-document chunk settings
+- [x] Token usage display (input / output / total per response)
+- [x] Index status persistence (success/failure in DB; hover to see failure reason)
+- [x] Document list column sorting (filename, chunk type, upload time, status)
+- [x] Document list search (real-time filename filter)
+- [x] OCR model change takes effect immediately (no backend restart)
+- [ ] In-browser document preview
+- [ ] Export chat history
+- [ ] Multi-user access control
+- [ ] One-click Docker deployment
+- [ ] Knowledge base versioning
 
 ### 🤝 Contributing
 

@@ -158,3 +158,125 @@ def get_message_count() -> int:
     with _get_conn() as conn:
         row = conn.execute("SELECT COUNT(*) as cnt FROM messages").fetchone()
         return row["cnt"] if row else 0
+
+
+def get_sessions() -> List[Dict[str, Any]]:
+    """
+    获取所有会话列表，每个会话包含第一条用户消息作为标题。
+
+    Returns:
+        会话列表，按最新消息倒序，每项包含：
+          session_id, title（第一条用户消息前30字）, created_at（会话创建时间）,
+          updated_at（最后一条消息时间）, message_count
+    """
+    with _get_conn() as conn:
+        rows = conn.execute("""
+            SELECT
+                session_id,
+                MIN(created_at) AS created_at,
+                MAX(created_at) AS updated_at,
+                COUNT(*) AS message_count
+            FROM messages
+            GROUP BY session_id
+            ORDER BY updated_at DESC
+        """).fetchall()
+
+        sessions = []
+        for row in rows:
+            # 取该会话第一条 user 消息作为标题
+            title_row = conn.execute("""
+                SELECT content FROM messages
+                WHERE session_id = ? AND role = 'user'
+                ORDER BY id ASC LIMIT 1
+            """, (row["session_id"],)).fetchone()
+
+            title = (title_row["content"][:30] + "…") if title_row and len(title_row["content"]) > 30 else (title_row["content"] if title_row else "新对话")
+
+            sessions.append({
+                "session_id":    row["session_id"],
+                "title":         title,
+                "created_at":    row["created_at"],
+                "updated_at":    row["updated_at"],
+                "message_count": row["message_count"],
+            })
+
+    return sessions
+
+
+def get_session_messages(session_id: str) -> List[Dict[str, Any]]:
+    """
+    获取指定会话的所有消息（正序）。
+
+    Args:
+        session_id: 会话 ID
+
+    Returns:
+        消息列表，格式与 get_history 相同
+    """
+    with _get_conn() as conn:
+        rows = conn.execute("""
+            SELECT id, session_id, role, content, sources, created_at
+            FROM messages
+            WHERE session_id = ?
+            ORDER BY id ASC
+        """, (session_id,)).fetchall()
+
+    return [{
+        "id":         row["id"],
+        "session_id": row["session_id"],
+        "role":       row["role"],
+        "content":    row["content"],
+        "sources":    json.loads(row["sources"] or "[]"),
+        "created_at": row["created_at"],
+    } for row in rows]
+
+
+def delete_session(session_id: str):
+    """
+    删除指定会话的所有消息。
+
+    Args:
+        session_id: 要删除的会话 ID
+    """
+    with _get_conn() as conn:
+        conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
+        conn.commit()
+
+
+def rename_session(session_id: str, title: str):
+    """
+    重命名会话：通过更新该会话第一条 user 消息内容的前缀来存储标题。
+    实际上我们用一个独立的 sessions 表来存储自定义标题。
+    此函数确保 sessions 表存在并更新标题。
+    """
+    # 先确保 sessions 表存在
+    with _get_conn() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS session_titles (
+                session_id TEXT PRIMARY KEY,
+                title      TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            INSERT INTO session_titles (session_id, title)
+            VALUES (?, ?)
+            ON CONFLICT(session_id) DO UPDATE SET title = excluded.title
+        """, (session_id, title))
+        conn.commit()
+
+
+def get_session_title(session_id: str) -> str | None:
+    """
+    获取会话的自定义标题（如果有的话）。
+    """
+    with _get_conn() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS session_titles (
+                session_id TEXT PRIMARY KEY,
+                title      TEXT NOT NULL
+            )
+        """)
+        row = conn.execute("""
+            SELECT title FROM session_titles WHERE session_id = ?
+        """, (session_id,)).fetchone()
+        return row["title"] if row else None

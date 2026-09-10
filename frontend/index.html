@@ -48,19 +48,34 @@
             </div>
 
             <!-- -----------------------------------------------
+                 新建对话按钮
+                 ----------------------------------------------- -->
+            <div class="sidebar-new-chat">
+                <button class="btn-new-chat" id="newChatBtn">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5">
+                        <line x1="12" y1="5" x2="12" y2="19"></line>
+                        <line x1="5" y1="12" x2="19" y2="12"></line>
+                    </svg>
+                    <span data-i18n="nav.newChat">开启新对话</span>
+                </button>
+            </div>
+
+            <!-- -----------------------------------------------
+                 会话列表
+                 ----------------------------------------------- -->
+            <div class="sidebar-sessions" id="sessionListContainer">
+                <div class="session-list" id="sessionList">
+                    <!-- 由 JS 动态渲染 -->
+                </div>
+            </div>
+
+            <!-- -----------------------------------------------
                  导航菜单
                  ----------------------------------------------- -->
-            <div class="sidebar-section">
-                <h3 data-i18n="sidebar.nav">导航</h3>
-                <nav class="nav-menu" style="display: flex; flex-direction: column; gap: 8px;">
-                    <a href="/" class="nav-item active" style="display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 8px; text-decoration: none; color: white; background: var(--primary);">
-                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-                        </svg>
-                        <span data-i18n="nav.chat">聊天对话</span>
-                    </a>
-                    <a href="/knowledge" class="nav-item" style="display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 8px; text-decoration: none; color: var(--text-secondary);">
-                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+            <div class="sidebar-section sidebar-nav-section">
+                <nav class="nav-menu" style="display: flex; flex-direction: column; gap: 6px;">
+                    <a href="/knowledge" class="nav-item" style="display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-radius: 8px; text-decoration: none; color: var(--text-secondary);">
+                        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
                             <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
                         </svg>
@@ -73,90 +88,104 @@
                  系统状态区域：向量库条目数、上传文件数、清空按钮
                  ----------------------------------------------- -->
             <div class="sidebar-section">
-                <h3 data-i18n="sidebar.status">系统状态</h3>
+                <details class="sidebar-collapsible">
+                    <summary class="sidebar-collapsible-title">
+                        <h3 data-i18n="sidebar.status">系统状态</h3>
+                        <svg class="sidebar-chevron" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5">
+                            <polyline points="6 9 12 15 18 9"></polyline>
+                        </svg>
+                    </summary>
 
-                <!-- 知识库选择 -->
-                <div class="kb-selector" style="margin-bottom: 16px;">
-                    <label data-i18n="sidebar.selectKb" style="display: block; font-size: 13px; color: var(--text-secondary); margin-bottom: 6px;">选择知识库:</label>
-                    <select id="chatKbSelect" class="kb-select-input" style="width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font-size: 13px; cursor: pointer;">
-                        <option value="all" data-i18n="sidebar.allKb">所有已启用的知识库</option>
-                    </select>
-                </div>
+                    <!-- 知识库选择 -->
+                    <div class="kb-selector" style="margin-bottom: 16px;">
+                        <label data-i18n="sidebar.selectKb" style="display: block; font-size: 13px; color: var(--text-secondary); margin-bottom: 6px;">选择知识库:</label>
+                        <select id="chatKbSelect" class="kb-select-input" style="width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font-size: 13px; cursor: pointer;">
+                            <option value="all" data-i18n="sidebar.allKb">所有已启用的知识库</option>
+                        </select>
+                    </div>
 
-                <!-- 统计数据展示 -->
-                <div class="status-info" id="statusInfo">
-                    <div class="status-item">
-                        <span class="status-label" data-i18n="sidebar.vectorCount">向量库条目:</span>
-                        <span class="status-value" id="dbCount">-</span>
+                    <!-- 统计数据展示 -->
+                    <div class="status-info" id="statusInfo">
+                        <div class="status-item">
+                            <span class="status-label" data-i18n="sidebar.vectorCount">向量库条目:</span>
+                            <span class="status-value" id="dbCount">-</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="status-label" data-i18n="sidebar.fileCount">上传文件:</span>
+                            <span class="status-value" id="fileCount">-</span>
+                        </div>
                     </div>
-                    <div class="status-item">
-                        <span class="status-label" data-i18n="sidebar.fileCount">上传文件:</span>
-                        <span class="status-value" id="fileCount">-</span>
-                    </div>
-                </div>
 
-                <!-- 重新索引进度条区域，默认隐藏 -->
-                <div class="reindex-progress" id="reindexProgress" style="display:none;">
-                    <div class="reindex-header">
-                        <span class="reindex-label" data-i18n="sidebar.reindexing">🔄 重新索引中</span>
-                        <span class="reindex-count" id="reindexCount">0/0</span>
+                    <!-- 重新索引进度条区域，默认隐藏 -->
+                    <div class="reindex-progress" id="reindexProgress" style="display:none;">
+                        <div class="reindex-header">
+                            <span class="reindex-label" data-i18n="sidebar.reindexing">🔄 重新索引中</span>
+                            <span class="reindex-count" id="reindexCount">0/0</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="reindexProgressFill"></div>
+                        </div>
+                        <span class="reindex-status" id="reindexStatus" data-i18n="sidebar.preparing">准备中...</span>
                     </div>
-                    <div class="progress-bar">
-                        <div class="progress-fill" id="reindexProgressFill"></div>
-                    </div>
-                    <span class="reindex-status" id="reindexStatus" data-i18n="sidebar.preparing">准备中...</span>
-                </div>
+                </details>
             </div>
 
             <!-- 模型状态 -->
             <div class="sidebar-section">
-                <h3 data-i18n="sidebar.models">模型状态</h3>
-                <div id="modelStatusList">
+                <details class="sidebar-collapsible">
+                    <summary class="sidebar-collapsible-title">
+                        <h3 data-i18n="sidebar.models">模型状态</h3>
+                        <svg class="sidebar-chevron" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5">
+                            <polyline points="6 9 12 15 18 9"></polyline>
+                        </svg>
+                    </summary>
+                    <div id="modelStatusList">
 
-                    <div class="model-status-item" id="ms-chat">
-                        <span class="model-status-dot checking"></span>
-                        <span class="model-status-name" data-i18n="model.chat">对话模型</span>
-                        <span class="model-status-msg">检查中...</span>
-                        <button class="model-reload-btn" onclick="reloadModel('chat')" title="重新加载对话模型">
-                            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5">
-                                <polyline points="23 4 23 10 17 10"></polyline>
-                                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
-                            </svg>
-                        </button>
+                        <div class="model-status-item" id="ms-chat">
+                            <span class="model-status-dot checking"></span>
+                            <span class="model-status-name" data-i18n="model.chat">对话模型</span>
+                            <span class="model-status-msg">检查中...</span>
+                            <button class="model-reload-btn" onclick="reloadModel('chat')" title="重新加载对话模型">
+                                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5">
+                                    <polyline points="23 4 23 10 17 10"></polyline>
+                                    <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+                                </svg>
+                            </button>
+                        </div>
+
+                        <!-- 嵌入模型状态条目（用于文本向量化） -->
+                        <div class="model-status-item" id="ms-embed">
+                            <span class="model-status-dot checking"></span>
+                            <span class="model-status-name" data-i18n="model.embed">嵌入模型</span>
+                            <span class="model-status-msg">检查中...</span>
+                            <button class="model-reload-btn" onclick="reloadModel('embed')" title="重新加载嵌入模型">
+                                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5">
+                                    <polyline points="23 4 23 10 17 10"></polyline>
+                                    <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+                                </svg>
+                            </button>
+                        </div>
+
+                        <div class="model-status-item" id="ms-rerank">
+                            <span class="model-status-dot checking"></span>
+                            <span class="model-status-name" data-i18n="model.rerank">Rerank模型</span>
+                            <span class="model-status-msg">检查中...</span>
+                            <button class="model-reload-btn" onclick="reloadModel('rerank')" title="重新加载Rerank模型">
+                                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5">
+                                    <polyline points="23 4 23 10 17 10"></polyline>
+                                    <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+                                </svg>
+                            </button>
+                        </div>
+
+                        <div class="model-status-item" id="ms-ocr">
+                            <span class="model-status-dot" id="ms-ocr-dot" style="background: var(--text-secondary);"></span>
+                            <span class="model-status-name" data-i18n="model.ocr">OCR模型</span>
+                            <span class="model-status-msg" id="ms-ocr-msg">未配置</span>
+                        </div>
+
                     </div>
-
-                    <!-- 嵌入模型状态条目（用于文本向量化） -->
-                    <div class="model-status-item" id="ms-embed">
-                        <span class="model-status-dot checking"></span>
-                        <span class="model-status-name" data-i18n="model.embed">嵌入模型</span>
-                        <span class="model-status-msg">检查中...</span>
-                        <button class="model-reload-btn" onclick="reloadModel('embed')" title="重新加载嵌入模型">
-                            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5">
-                                <polyline points="23 4 23 10 17 10"></polyline>
-                                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
-                            </svg>
-                        </button>
-                    </div>
-
-                    <div class="model-status-item" id="ms-rerank">
-                        <span class="model-status-dot checking"></span>
-                        <span class="model-status-name" data-i18n="model.rerank">Rerank模型</span>
-                        <span class="model-status-msg">检查中...</span>
-                        <button class="model-reload-btn" onclick="reloadModel('rerank')" title="重新加载Rerank模型">
-                            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5">
-                                <polyline points="23 4 23 10 17 10"></polyline>
-                                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
-                            </svg>
-                        </button>
-                    </div>
-
-                    <div class="model-status-item" id="ms-ocr">
-                        <span class="model-status-dot" id="ms-ocr-dot" style="background: var(--text-secondary);"></span>
-                        <span class="model-status-name" data-i18n="model.ocr">OCR模型</span>
-                        <span class="model-status-msg" id="ms-ocr-msg">未配置</span>
-                    </div>
-
-                </div>
+                </details>
             </div>
 
         </aside>
@@ -565,7 +594,7 @@
     </div>
 
     <!-- 引入前端交互逻辑脚本，v=2 用于强制浏览器刷新缓存 -->
-    <script src="/static/app.js?v=10"></script>
+    <script src="/static/app.js?v=11"></script>
 
     <!-- =====================================================
          Embedding 模型变更警告 Modal：更换嵌入模型时弹出
@@ -679,6 +708,28 @@
                 <button class="btn btn-danger" id="deleteConfirmBtn">删除</button>
             </div>
 
+        </div>
+    </div>
+
+    <!-- =====================================================
+         重命名会话 Modal
+         ===================================================== -->
+    <div class="modal-overlay" id="renameSessionModal" style="display:none;">
+        <div class="modal" style="max-width:380px;">
+            <div class="modal-icon">
+                <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                </svg>
+            </div>
+            <h3 class="modal-title" data-i18n="session.renameTitle">重命名会话</h3>
+            <div style="padding: 0 4px;">
+                <input type="text" id="renameSessionInput" maxlength="50" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);font-size:14px;outline:none;box-sizing:border-box;" placeholder="输入新名称…" />
+            </div>
+            <div class="modal-actions" style="margin-top:16px;">
+                <button class="btn btn-secondary" id="renameSessionCancelBtn" data-i18n="btn.cancel">取消</button>
+                <button class="btn btn-primary" id="renameSessionConfirmBtn" data-i18n="btn.confirm">确认</button>
+            </div>
         </div>
     </div>
 

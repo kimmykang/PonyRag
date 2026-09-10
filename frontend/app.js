@@ -26,7 +26,7 @@ const API_BASE = window.location.origin;
 
 // 应用全局状态管理（单一数据源）
 const state = {
-    sessionId: crypto.randomUUID().slice(0, 8), // 会话 ID，用于后端关联多轮对话（前 8 位即可）
+    sessionId: crypto.randomUUID().slice(0, 8), // 当前会话 ID
     chatHistory: [], // 历史对话记录，格式 [["user", "内容"], ["assistant", "内容"]]
     isProcessing: false, // 是否正在处理聊天请求（防止重复提交）
     abortController: null, // 当前流式请求的 AbortController
@@ -35,6 +35,10 @@ const state = {
     currentKbId: 'knowledge_base', // 当前选中的知识库 ID
     knowledgeBases: [], // 知识库列表
     selectedKbIds: null, // 用户选择的知识库ID列表，null表示所有已启用的知识库
+    // ── 多会话 ──
+    sessions: [], // 会话列表（从后端加载）
+    currentSessionId: null, // 当前激活的会话 ID（null 表示新会话未保存）
+    isNewSession: true, // 当前是否是尚未有消息的新会话
 };
 
 // DOM 元素引用（集中管理，避免重复 querySelector）
@@ -83,6 +87,10 @@ const dom = {
     // 设置
     settingsBtn: document.getElementById('settingsBtn'), // 设置按钮（齿轮图标）
     clearChatBtn: document.getElementById('clearChatBtn'), // 清空聊天记录按钮
+
+    // 多会话
+    newChatBtn: document.getElementById('newChatBtn'), // 新建对话按钮
+    sessionList: document.getElementById('sessionList'), // 会话列表容器
 };
 
 // ──────────────────────────────────────────────────────────────
@@ -126,7 +134,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     await loadKnowledgeBases();
     await loadDocuments();
     await loadStats();
-    loadChatHistory(); // 恢复历史聊天记录
+    await loadSessions(); // 加载会话列表（多会话）
     pollModelStatus();
     updateOcrModelStatus(); // 初始显示 OCR 模型状态
 });
@@ -148,6 +156,11 @@ function initEventListeners() {
     // 侧边栏切换（桌面端折叠/移动端滑出）
     dom.menuBtn.addEventListener('click', toggleSidebar);
     dom.sidebarToggle.addEventListener('click', toggleSidebar);
+
+    // 新建对话按钮
+    if (dom.newChatBtn) {
+        dom.newChatBtn.addEventListener('click', startNewSession);
+    }
 
     // 模型设置（点击齿轮打开 Modal）
     dom.settingsBtn.addEventListener('click', openSettingsModal);
@@ -1246,6 +1259,13 @@ async function handleChatSubmit(e) {
             addMessage('assistant', data.answer, data.sources, new Date().toISOString());
             state.chatHistory.push(['assistant', data.answer]);
             state.sessionId = data.session_id || state.sessionId;
+            // ── 多会话：更新侧边栏会话列表 ──
+            if (state.isNewSession && data.answer) {
+                state.isNewSession = false;
+                addSessionToList(state.sessionId, question);
+            } else {
+                bumpSessionToTop(state.sessionId);
+            }
         } catch (err) {
             typingEl.remove();
             addMessage('assistant', `请求出错: ${err.message}`);
@@ -1354,6 +1374,14 @@ async function handleChatSubmit(e) {
 
         state.sessionId = sessionId;
         state.chatHistory.push(['assistant', fullAnswer]);
+
+        // ── 多会话：更新侧边栏会话列表 ──────────────────────
+        if (state.isNewSession && fullAnswer) {
+            state.isNewSession = false;
+            addSessionToList(sessionId, question);
+        } else {
+            bumpSessionToTop(sessionId);
+        }
 
     } catch (err) {
         // AbortError = 用户主动停止，不显示错误消息，保留已输出内容
@@ -1792,32 +1820,352 @@ function _renderMarkdownImpl(text) {
  * 页面加载时从后端 SQLite 恢复历史聊天记录。
  * 若有历史消息，隐藏欢迎页并渲染所有消息气泡。
  */
-async function loadChatHistory() {
+/**
+ * 加载所有会话列表，渲染侧边栏，然后激活最近的一条会话（或新会话）。
+ */
+async function loadSessions() {
     try {
-        const res = await fetch(`${API_BASE}/api/chat-history?limit=200`);
+        const res = await fetch(`${API_BASE}/api/sessions`);
         if (!res.ok) return;
         const data = await res.json();
-        const messages = data.messages || [];
-        if (messages.length === 0) return;
+        state.sessions = data.sessions || [];
 
-        // 有历史消息，隐藏欢迎页
-        dom.welcomeMessage.style.display = 'none';
+        renderSessionList();
 
-        // 渲染所有历史消息
-        messages.forEach(msg => {
-            addMessage(msg.role, msg.content, msg.sources || [], msg.created_at);
-        });
-
-        // 恢复 chatHistory 用于 RAG 上下文（取最近 20 条）
-        state.chatHistory = messages.slice(-20).map(m => [m.role, m.content]);
-
+        if (state.sessions.length > 0) {
+            // 激活最近的会话
+            await switchSession(state.sessions[0].session_id);
+        } else {
+            // 没有历史，保持新会话状态
+            state.currentSessionId = null;
+            state.isNewSession = true;
+        }
     } catch (e) {
-        console.error('恢复聊天历史失败:', e);
+        console.error('加载会话列表失败:', e);
     }
 }
 
 /**
- * 显示清空聊天记录的确认 Modal。
+ * 渲染侧边栏会话列表（带日期分组）。
+ */
+function renderSessionList() {
+    const list = dom.sessionList;
+    if (!list) return;
+    list.innerHTML = '';
+
+    if (state.sessions.length === 0) {
+        list.innerHTML = `<div class="session-list-empty">${t('session.emptyHint') || '暂无历史对话'}</div>`;
+        return;
+    }
+
+    // 按日期分组
+    const now = new Date();
+    const groups = {
+        today: [],
+        week: [],
+        month: [],
+        older: []
+    };
+
+    state.sessions.forEach(s => {
+        const d = new Date(s.updated_at);
+        const diffDays = (now - d) / 86400000;
+        if (diffDays < 1) groups.today.push(s);
+        else if (diffDays < 7) groups.week.push(s);
+        else if (diffDays < 30) groups.month.push(s);
+        else groups.older.push(s);
+    });
+
+    const groupLabels = {
+        today: t('session.today') || '今天',
+        week: t('session.week') || '7 天内',
+        month: t('session.month') || '30 天内',
+        older: t('session.older') || '更早',
+    };
+
+    ['today', 'week', 'month', 'older'].forEach(key => {
+        if (groups[key].length === 0) return;
+        const label = document.createElement('div');
+        label.className = 'session-group-label';
+        label.textContent = groupLabels[key];
+        list.appendChild(label);
+
+        groups[key].forEach(s => {
+            list.appendChild(createSessionItem(s));
+        });
+    });
+}
+
+/**
+ * 创建单条会话 DOM 元素。
+ */
+function createSessionItem(session) {
+    const item = document.createElement('div');
+    item.className = 'session-item' + (session.session_id === state.currentSessionId ? ' active' : '');
+    item.dataset.sessionId = session.session_id;
+
+    item.innerHTML = `
+        <span class="session-item-title" title="${escapeHtml(session.title)}">${escapeHtml(session.title)}</span>
+        <div class="session-item-actions">
+            <button class="session-action-btn" data-action="rename" title="重命名">
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                </svg>
+            </button>
+            <button class="session-action-btn danger" data-action="delete" title="删除">
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="3 6 5 6 21 6"></polyline>
+                    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
+                    <path d="M10 11v6M14 11v6"></path>
+                </svg>
+            </button>
+        </div>
+    `;
+
+    // 点击会话切换
+    item.addEventListener('click', (e) => {
+        if (e.target.closest('.session-action-btn')) return;
+        switchSession(session.session_id);
+    });
+
+    // 重命名按钮
+    item.querySelector('[data-action="rename"]').addEventListener('click', (e) => {
+        e.stopPropagation();
+        showRenameSessionModal(session);
+    });
+
+    // 删除按钮
+    item.querySelector('[data-action="delete"]').addEventListener('click', (e) => {
+        e.stopPropagation();
+        showDeleteSessionModal(session);
+    });
+
+    return item;
+}
+
+/**
+ * 切换到指定会话：加载该会话消息并渲染。
+ */
+async function switchSession(sessionId) {
+    if (state.isProcessing) return; // 生成中不允许切换
+
+    state.currentSessionId = sessionId;
+    state.sessionId = sessionId; // 同步给发送逻辑使用
+    state.isNewSession = false;
+
+    // 更新侧边栏高亮
+    document.querySelectorAll('.session-item').forEach(el => {
+        el.classList.toggle('active', el.dataset.sessionId === sessionId);
+    });
+
+    // 清空消息区，显示加载占位
+    dom.messages.innerHTML = '';
+    dom.welcomeMessage.style.display = 'none';
+
+    try {
+        const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/messages`);
+        if (!res.ok) throw new Error('加载失败');
+        const data = await res.json();
+        const messages = data.messages || [];
+
+        if (messages.length === 0) {
+            dom.welcomeMessage.style.display = '';
+        } else {
+            messages.forEach(msg => {
+                addMessage(msg.role, msg.content, msg.sources || [], msg.created_at);
+            });
+            // 恢复多轮上下文
+            state.chatHistory = messages.slice(-20).map(m => [m.role, m.content]);
+        }
+    } catch (e) {
+        console.error('加载会话消息失败:', e);
+    }
+
+    // 移动端：切换后关闭侧边栏
+    if (window.innerWidth <= 768) toggleSidebar();
+}
+
+/**
+ * 开始一个全新的空白会话。
+ */
+function startNewSession() {
+    if (state.isProcessing) return;
+
+    state.sessionId = crypto.randomUUID().slice(0, 8);
+    state.currentSessionId = null;
+    state.isNewSession = true;
+    state.chatHistory = [];
+
+    // 清空消息区，恢复欢迎页
+    dom.messages.innerHTML = '';
+    dom.welcomeMessage.style.display = '';
+
+    // 取消侧边栏所有高亮
+    document.querySelectorAll('.session-item').forEach(el => el.classList.remove('active'));
+
+    // 移动端关闭侧边栏
+    if (window.innerWidth <= 768) toggleSidebar();
+
+    // 聚焦输入框
+    dom.questionInput.focus();
+}
+
+/**
+ * 发送第一条消息后，把新会话插入侧边栏列表最顶部。
+ */
+function addSessionToList(sessionId, firstMessage) {
+    const title = firstMessage.length > 30 ? firstMessage.slice(0, 30) + '…' : firstMessage;
+    const newSession = {
+        session_id: sessionId,
+        title: title,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        message_count: 1,
+    };
+
+    // 避免重复
+    state.sessions = state.sessions.filter(s => s.session_id !== sessionId);
+    state.sessions.unshift(newSession);
+    state.currentSessionId = sessionId;
+    renderSessionList();
+}
+
+/**
+ * 发送消息后更新会话的 updated_at 并移到列表最顶。
+ */
+function bumpSessionToTop(sessionId) {
+    const idx = state.sessions.findIndex(s => s.session_id === sessionId);
+    if (idx > 0) {
+        const [s] = state.sessions.splice(idx, 1);
+        s.updated_at = new Date().toISOString();
+        state.sessions.unshift(s);
+        renderSessionList();
+    }
+}
+
+/**
+ * 显示删除单个会话的确认弹窗。
+ */
+function showDeleteSessionModal(session) {
+    const modal = document.getElementById('deleteModal');
+    document.getElementById('deleteModalBody').textContent = `确定要删除会话「${session.title}」吗？`;
+    modal.style.display = 'flex';
+
+    const confirmBtn = document.getElementById('deleteConfirmBtn');
+    const cancelBtn = document.getElementById('deleteCancelBtn');
+
+    function close() {
+        modal.style.display = 'none';
+        confirmBtn.replaceWith(confirmBtn.cloneNode(true));
+        cancelBtn.replaceWith(cancelBtn.cloneNode(true));
+    }
+
+    document.getElementById('deleteConfirmBtn').addEventListener('click', async () => {
+        close();
+        try {
+            await fetch(`${API_BASE}/api/sessions/${session.session_id}`, {
+                method: 'DELETE'
+            });
+            state.sessions = state.sessions.filter(s => s.session_id !== session.session_id);
+            renderSessionList();
+
+            // 如果删的是当前会话，切到最新一条或新建
+            if (state.currentSessionId === session.session_id) {
+                if (state.sessions.length > 0) {
+                    await switchSession(state.sessions[0].session_id);
+                } else {
+                    startNewSession();
+                }
+            }
+        } catch (e) {
+            console.error('删除会话失败:', e);
+        }
+    });
+    document.getElementById('deleteCancelBtn').addEventListener('click', close);
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) close();
+    }, {
+        once: true
+    });
+}
+
+/**
+ * 显示重命名会话弹窗。
+ */
+function showRenameSessionModal(session) {
+    const modal = document.getElementById('renameSessionModal');
+    const input = document.getElementById('renameSessionInput');
+    input.value = session.title;
+    modal.style.display = 'flex';
+
+    // 自动聚焦+全选
+    setTimeout(() => {
+        input.select();
+    }, 50);
+
+    const confirmBtn = document.getElementById('renameSessionConfirmBtn');
+    const cancelBtn = document.getElementById('renameSessionCancelBtn');
+
+    function close() {
+        modal.style.display = 'none';
+        confirmBtn.replaceWith(confirmBtn.cloneNode(true));
+        cancelBtn.replaceWith(cancelBtn.cloneNode(true));
+    }
+
+    document.getElementById('renameSessionConfirmBtn').addEventListener('click', async () => {
+        const newTitle = input.value.trim();
+        if (!newTitle) return;
+        close();
+        try {
+            await fetch(`${API_BASE}/api/sessions/${session.session_id}/title`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    title: newTitle
+                }),
+            });
+            // 更新本地 state
+            const s = state.sessions.find(s => s.session_id === session.session_id);
+            if (s) s.title = newTitle;
+            renderSessionList();
+        } catch (e) {
+            console.error('重命名会话失败:', e);
+        }
+    });
+
+    // Enter 确认
+    input.addEventListener('keydown', function handler(e) {
+        if (e.key === 'Enter') {
+            const cb = document.getElementById('renameSessionConfirmBtn');
+            if (cb) cb.click();
+            input.removeEventListener('keydown', handler);
+        }
+        if (e.key === 'Escape') {
+            close();
+            input.removeEventListener('keydown', handler);
+        }
+    });
+
+    document.getElementById('renameSessionCancelBtn').addEventListener('click', close);
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) close();
+    }, {
+        once: true
+    });
+}
+
+/**
+ * 旧的 loadChatHistory 保留以兼容，实际由 loadSessions 替代。
+ */
+async function loadChatHistory() {
+    // 已由 loadSessions() 接管，此函数保留为空避免报错
+}
+
+/**
+ * 显示清空所有聊天记录的确认 Modal。
  * 确认后调用后端 DELETE /api/chat-history，清空数据库和界面。
  */
 function showClearChatModal() {
@@ -1841,11 +2189,11 @@ function showClearChatModal() {
                 method: 'DELETE'
             });
             if (!res.ok) throw new Error('请求失败');
-            // 清空界面消息列表
-            dom.messages.innerHTML = '';
+            // 清空所有会话状态
+            state.sessions = [];
             state.chatHistory = [];
-            // 恢复欢迎页：移除 inline style，让 CSS 默认 block 布局生效
-            dom.welcomeMessage.style.display = '';
+            renderSessionList();
+            startNewSession();
         } catch (e) {
             console.error('清空聊天记录失败:', e);
         }
@@ -1863,6 +2211,7 @@ document.addEventListener('langchange', () => {
     _updateLangToggleBtn();
     updateOcrModelStatus();
     renderChatKbSelector(); // 刷新知识库下拉框
+    renderSessionList(); // 刷新会话列表分组标签
     // 强制刷新一次模型状态文字
     _allModelsReady = false;
     pollModelStatus();

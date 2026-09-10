@@ -19,6 +19,15 @@ const LANGS = {
 
         'nav.chat': '聊天对话',
         'nav.knowledge': '知识库管理',
+        'nav.newChat': '开启新的对话',
+
+        'session.renameTitle': '重命名会话',
+        'session.deleteConfirm': '确定要删除该会话吗？',
+        'session.emptyHint': '暂无历史对话',
+        'session.today': '今天',
+        'session.week': '7 天内',
+        'session.month': '30 天内',
+        'session.older': '更早',
 
         'sidebar.nav': '导航',
         'sidebar.status': '系统状态',
@@ -212,6 +221,7 @@ const LANGS = {
         'docs.colName': '文件名',
         'docs.colChunk': '切分类型',
         'docs.colTime': '上传时间',
+        'docs.colStatus': '状态',
         'docs.colAction': '操作',
         'docs.legacy': '旧版·递归',
         'docs.rechunk': '修改切分方式',
@@ -259,6 +269,15 @@ const LANGS = {
 
         'nav.chat': 'Chat',
         'nav.knowledge': 'Knowledge Base',
+        'nav.newChat': 'New Chat',
+
+        'session.renameTitle': 'Rename Chat',
+        'session.deleteConfirm': 'Delete this chat session?',
+        'session.emptyHint': 'No chat history yet',
+        'session.today': 'Today',
+        'session.week': 'Last 7 days',
+        'session.month': 'Last 30 days',
+        'session.older': 'Older',
 
         'sidebar.nav': 'Navigation',
         'sidebar.status': 'System Status',
@@ -452,6 +471,7 @@ const LANGS = {
         'docs.colName': 'Filename',
         'docs.colChunk': 'Chunk type',
         'docs.colTime': 'Upload time',
+        'docs.colStatus': 'Status',
         'docs.colAction': 'Actions',
         'docs.legacy': 'Legacy·Recursive',
         'docs.rechunk': 'Change chunk method',

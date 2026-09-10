@@ -69,7 +69,10 @@ from document_processor import (
 )
 from rag_engine import RagEngine, rewrite_query
 from vector_store import VectorStoreManager
-from chat_history import init_db, save_message, get_history, clear_history
+from chat_history import (
+    init_db, save_message, get_history, clear_history,
+    get_sessions, get_session_messages, delete_session, rename_session, get_session_title,
+)
 from knowledge_base import (
     init_kb_table, create_kb, get_kb, list_kbs, list_enabled_kbs,
     update_kb, delete_kb, get_kb_upload_dir, get_kb_index_marker,
@@ -2439,6 +2442,93 @@ async def delete_chat_history():
     """
     clear_history()
     return {"status": "success", "message": "聊天记录已清空"}
+
+
+# ──────────────────────────────────────────────────────────────
+# 多会话管理 API
+# ──────────────────────────────────────────────────────────────
+
+@app.get("/api/sessions")
+async def list_sessions():
+    """
+    获取所有会话列表（按最新消息倒序）。
+
+    响应体示例：
+      {
+        "sessions": [
+          {
+            "session_id": "abc123",
+            "title": "欣生代计划A保额多少？",
+            "created_at": "2024-08-10T10:30:00",
+            "updated_at": "2024-08-10T10:31:00",
+            "message_count": 4
+          }
+        ]
+      }
+    """
+    sessions = get_sessions()
+    # 注入自定义标题（如果有）
+    for s in sessions:
+        custom = get_session_title(s["session_id"])
+        if custom:
+            s["title"] = custom
+    return {"sessions": sessions}
+
+
+@app.get("/api/sessions/{session_id}/messages")
+async def get_session_history(session_id: str):
+    """
+    获取指定会话的完整消息记录。
+
+    路径参数：
+      session_id: 会话 ID
+
+    响应体示例：
+      {
+        "messages": [
+          {"id": 1, "session_id": "abc123", "role": "user", "content": "...", ...}
+        ]
+      }
+    """
+    messages = get_session_messages(session_id)
+    return {"messages": messages}
+
+
+@app.delete("/api/sessions/{session_id}")
+async def delete_session_api(session_id: str):
+    """
+    删除指定会话及其所有消息。
+
+    路径参数：
+      session_id: 要删除的会话 ID
+
+    响应：
+      {"status": "success", "message": "会话已删除"}
+    """
+    delete_session(session_id)
+    return {"status": "success", "message": "会话已删除"}
+
+
+class RenameSessionRequest(BaseModel):
+    title: str
+
+
+@app.put("/api/sessions/{session_id}/title")
+async def rename_session_api(session_id: str, req: RenameSessionRequest):
+    """
+    重命名会话标题。
+
+    路径参数：
+      session_id: 会话 ID
+
+    请求体：
+      {"title": "新标题"}
+
+    响应：
+      {"status": "success"}
+    """
+    rename_session(session_id, req.title.strip()[:50])
+    return {"status": "success"}
 
 
 # ──────────────────────────────────────────────────────────────

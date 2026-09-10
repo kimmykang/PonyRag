@@ -626,7 +626,7 @@ function renderDocuments() {
                     <th>${t('docs.colName')}</th>
                     <th style="width: 130px;">${t('docs.colChunk')}</th>
                     <th style="width: 180px;">${t('docs.colTime')}</th>
-                    <th style="width: 90px; text-align: center;">状态</th>
+                    <th style="width: 90px; text-align: center;">${t('docs.colStatus')}</th>
                     <th style="width: 80px; text-align: center;">${t('docs.colAction')}</th>
                 </tr>
             </thead>
@@ -1483,7 +1483,7 @@ function renderDocuments() {
                     <th class="sortable-th" onclick="window.sortDocs('name')">${t('docs.colName')} ${arrow('name')}</th>
                     <th class="sortable-th" style="width: 130px;" onclick="window.sortDocs('chunk_method')">${t('docs.colChunk')} ${arrow('chunk_method')}</th>
                     <th class="sortable-th" style="width: 180px;" onclick="window.sortDocs('upload_time')">${t('docs.colTime')} ${arrow('upload_time')}</th>
-                    <th class="sortable-th" style="width: 90px; text-align: center;" onclick="window.sortDocs('index_status')">状态 ${arrow('index_status')}</th>
+                    <th class="sortable-th" style="width: 90px; text-align: center;" onclick="window.sortDocs('index_status')">${t('docs.colStatus')} ${arrow('index_status')}</th>
                     <th style="width: 80px; text-align: center;">${t('docs.colAction')}</th>
                 </tr>
             </thead>
