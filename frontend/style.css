@@ -1295,6 +1295,15 @@ body {
     padding: 0 8px 12px 0;
     align-items: stretch;
     /* 让所有按钮等高 */
+    flex-shrink: 0;
+}
+
+/* docs-modal 的底部操作栏固定，不参与滚动 */
+.docs-modal .modal-actions {
+    flex-shrink: 0;
+    padding: 12px 20px;
+    border-top: 1px solid var(--border);
+    margin: 0;
 }
 
 .modal-actions .btn {
@@ -1947,13 +1956,15 @@ body {
    ======================================== */
 
 .docs-modal {
-    width: 900px;
-    max-width: 95vw;
-    max-height: 85vh;
+    width: min(1100px, 94vw);
+    max-width: 94vw;
+    height: 90vh;
+    max-height: 90vh;
     padding: 0;
     text-align: left;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
 }
 
 .modal-header {
@@ -1971,23 +1982,37 @@ body {
 
 .docs-modal .modal-body {
     flex: 1;
-    overflow-y: auto;
-    min-height: 300px;
-    max-height: calc(85vh - 80px);
+    overflow: hidden;
+    /* modal-body 本身不滚动，子元素 docs-list 负责内部滚动 */
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    padding: 12px 16px;
 }
 
-/* 文档工具栏 */
+/* 工具栏固定在顶部，不随列表滚动 */
 .docs-toolbar {
+    flex-shrink: 0;
     display: flex;
-    gap: 10px;
-    margin-bottom: 16px;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 12px;
     align-items: center;
 }
 
+/* 覆盖 .btn-primary 的 width:100%，工具栏内按钮按内容自适应宽度 */
 .docs-toolbar .btn {
-    flex: 1;
+    flex: none;
+    width: auto !important;
     min-width: 0;
+    white-space: nowrap;
     justify-content: center;
+}
+
+/* 切分参数面板和进度条也固定，不随列表滚动 */
+.upload-chunk-panel,
+.upload-progress {
+    flex-shrink: 0;
 }
 
 /* 上传目录按钮 */
@@ -2002,11 +2027,16 @@ body {
     background: #d97706;
 }
 
-/* 文档列表 */
+/* 文档列表：占满剩余空间，纵向滚动，横向不溢出 */
 .docs-list {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
     display: flex;
     flex-direction: column;
     gap: 0;
+    min-height: 0;
+    /* flex 子元素需要 min-height:0 才能正确收缩 */
 }
 
 .docs-list .empty-state {
@@ -2020,6 +2050,7 @@ body {
     width: 100%;
     border-collapse: collapse;
     font-size: 0.9rem;
+    table-layout: fixed;
 }
 
 .docs-table thead {
@@ -2028,11 +2059,13 @@ body {
 }
 
 .docs-table th {
-    padding: 12px 14px;
+    padding: 10px 12px;
     text-align: left;
     font-weight: 600;
     color: var(--text);
     font-size: 0.85rem;
+    white-space: nowrap;
+    overflow: hidden;
 }
 
 .docs-table tbody tr {
@@ -2059,8 +2092,11 @@ body {
 }
 
 .docs-table td {
-    padding: 12px 14px;
+    padding: 9px 12px;
     vertical-align: middle;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .doc-icon-small {
@@ -2071,7 +2107,6 @@ body {
 .doc-name-cell {
     color: var(--text);
     font-weight: 500;
-    max-width: 400px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -2095,6 +2130,142 @@ body {
 
 .docs-table tbody tr.selected .doc-delete-btn {
     opacity: 0.6;
+}
+
+/* 文档搜索框 */
+.docs-search-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+    margin-left: auto;
+    flex-shrink: 0;
+}
+
+.docs-search-icon {
+    position: absolute;
+    left: 9px;
+    color: var(--text-secondary);
+    pointer-events: none;
+    flex-shrink: 0;
+}
+
+.docs-search-input {
+    padding: 5px 28px 5px 28px;
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 0.85rem;
+    width: 200px;
+    outline: none;
+    transition: border-color 0.15s, box-shadow 0.15s, width 0.2s;
+}
+
+.docs-search-input:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.18);
+    width: 260px;
+}
+
+.docs-search-input::placeholder {
+    color: var(--text-secondary);
+    opacity: 0.7;
+}
+
+.docs-search-clear {
+    position: absolute;
+    right: 8px;
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 1rem;
+    line-height: 1;
+    padding: 0 2px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    width: 18px;
+    height: 18px;
+    transition: background 0.15s, color 0.15s;
+}
+
+.docs-search-clear:hover {
+    background: rgba(99, 102, 241, 0.12);
+    color: var(--primary);
+}
+
+/* 可排序列头 */
+.sortable-th {
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+}
+
+.sortable-th:hover {
+    background: rgba(99, 102, 241, 0.08);
+    color: var(--primary);
+}
+
+.sort-arrow {
+    display: inline-block;
+    font-size: 0.75rem;
+    margin-left: 4px;
+    vertical-align: middle;
+    transition: color 0.15s;
+}
+
+.sort-none {
+    opacity: 0.3;
+}
+
+.sort-asc,
+.sort-desc {
+    color: var(--primary);
+    opacity: 1;
+}
+
+/* 文档索引状态列 */
+.doc-status-cell {
+    text-align: center;
+    white-space: nowrap;
+    width: 90px;
+}
+
+.doc-status-badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 10px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    white-space: nowrap;
+    letter-spacing: 0.02em;
+}
+
+.doc-status-badge.status-success {
+    background: rgba(16, 185, 129, 0.15);
+    color: #10b981;
+    border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.doc-status-badge.status-failed {
+    background: rgba(239, 68, 68, 0.12);
+    color: #ef4444;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    cursor: help;
+}
+
+[data-theme="dark"] .doc-status-badge.status-success {
+    background: rgba(16, 185, 129, 0.2);
+    color: #34d399;
+    border-color: rgba(16, 185, 129, 0.4);
+}
+
+[data-theme="dark"] .doc-status-badge.status-failed {
+    background: rgba(239, 68, 68, 0.18);
+    color: #f87171;
+    border-color: rgba(239, 68, 68, 0.4);
 }
 
 /* 旧的文档列表项样式（已改用表格）
@@ -2191,8 +2362,10 @@ body {
 /* 响应式 */
 @media (max-width: 768px) {
     .docs-modal {
-        width: 95vw;
-        max-height: 90vh;
+        width: 98vw;
+        max-width: 98vw;
+        height: 92vh;
+        max-height: 92vh;
     }
 
     .docs-toolbar {

@@ -39,6 +39,86 @@ def _maybe_no_think(prompt: str) -> str:
     return prompt
 
 
+def rewrite_query(question: str, chat_history: list = None) -> str:
+    """
+    问题改写（Query Rewrite）：结合对话历史把省略指代的问题补全为独立完整的查询。
+
+    场景示例：
+      历史：Q: 欣生代ABC计划的区别
+      当前：大概保费是多少
+      改写：欣生代ABC计划的大概保费分别是多少
+
+    策略：
+      - 无历史对话，或历史只有1条，直接返回原问题（无需改写）
+      - 优先使用 REWRITE_MODEL（轻量模型），未配置则使用 CHAT_MODEL
+      - 失败则降级返回原问题
+
+    Args:
+        question:     当前用户问题
+        chat_history: 历史对话列表，格式 [["user"/"assistant", "内容"], ...]
+
+    Returns:
+        改写后的完整问题字符串
+    """
+    # 无历史或只有一轮，当前问题已经是完整的
+    if not chat_history or len(chat_history) < 2:
+        return question
+
+    try:
+        from config import CHAT_MODEL, OLLAMA_BASE_URL, THINKING
+        import config as _cfg
+
+        # 优先用轻量改写模型，没有则用对话模型
+        rewrite_model = getattr(_cfg, "REWRITE_MODEL", "") or CHAT_MODEL
+
+        # 只取最近 4 条（2轮），足够理解指代，不引入过多噪音
+        recent = chat_history[-4:]
+        history_lines = []
+        for h in recent:
+            role = "用户" if h[0] in ("user", True, "用户") else "客服"
+            history_lines.append(f"{role}: {h[1]}")
+        history_str = "\n".join(history_lines)
+
+        prompt = (
+            "/no_think\n"
+            "根据以下对话历史，将最后的用户问题改写为一个独立、完整的问题。\n"
+            "要求：\n"
+            "1. 补全省略的主语、宾语、指代词（如「它」「这个」「哪个」「分别」等）\n"
+            "2. 保持原意不变，不要添加任何假设或推断\n"
+            "3. 如果当前问题已经完整独立，原样返回\n"
+            "4. 只返回改写后的问题，不要解释\n\n"
+            f"对话历史：\n{history_str}\n\n"
+            f"当前问题：{question}\n\n"
+            "改写后的问题："
+        )
+
+        with httpx.Client(transport=httpx.HTTPTransport(), timeout=120) as client:
+            resp = client.post(
+                f"{OLLAMA_BASE_URL}/api/generate",
+                json={
+                    "model": rewrite_model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "keep_alive": "30m",
+                    "think": THINKING,
+                    "options": {"temperature": 0, "num_ctx": 2048},
+                },
+            )
+            resp.raise_for_status()
+            rewritten = resp.json().get("response", "").strip()
+
+        # 防止 LLM 返回过长或空内容
+        if not rewritten or len(rewritten) > len(question) * 5:
+            return question
+
+        print(f"[QueryRewrite] '{question}' → '{rewritten}'")
+        return rewritten
+
+    except Exception as e:
+        print(f"[QueryRewrite] 改写失败，使用原问题: {e}")
+        return question
+
+
 def _build_context(docs: List[Document], char_limit: int = None):
     """
     从文档列表构建 context 字符串和 sources 列表。

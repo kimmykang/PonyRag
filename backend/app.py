@@ -67,7 +67,7 @@ from document_processor import (
     parse_document, chunk_texts, upload_file, list_documents, cleanup_document,
     convert_to_md, ALLOWED_EXTENSIONS, auto_detect_chunk_method,
 )
-from rag_engine import RagEngine
+from rag_engine import RagEngine, rewrite_query
 from vector_store import VectorStoreManager
 from chat_history import init_db, save_message, get_history, clear_history
 from knowledge_base import (
@@ -408,8 +408,13 @@ async def lifespan(app: FastAPI):
     )
     t.start()
 
-    # 批量索引所有知识库中未入库的文档
-    _batch_ingest_all_kbs()
+    # 批量索引所有知识库中未入库的文档（仅处理已有 .md 的文件，不执行格式转换）
+    # 受 STARTUP_INGEST 开关控制，默认关闭
+    import config as _startup_cfg
+    if getattr(_startup_cfg, "STARTUP_INGEST", False):
+        _batch_ingest_all_kbs()
+    else:
+        print("[Startup] 自动索引已关闭（STARTUP_INGEST=false），跳过批量入库")
     print("=" * 50)
     yield  # 应用运行期间阻塞在此
 
@@ -608,6 +613,8 @@ def _batch_ingest(upload_dir: str, kb_id: str = "knowledge_base"):
     errors   = []
 
     # ── 阶段 1：转换非 md 文件 ──────────────────────────────────
+    # 注意：启动时跳过格式转换（convert_to_md），避免 OCR 等耗时操作与模型加载竞争资源。
+    # 没有对应 .md 的文档本轮不入库，用户手动上传时才执行转换。
     for f in sorted(dir_path.iterdir()):
         if not f.is_file() or f.name.startswith("."):
             continue
@@ -615,11 +622,7 @@ def _batch_ingest(upload_dir: str, kb_id: str = "knowledge_base"):
         if ext in (".pdf", ".docx", ".doc", ".txt", ".xlsx", ".xls", ".pptx", ".ppt"):
             md_path = f.with_suffix(".md")
             if not md_path.exists():
-                try:
-                    convert_to_md(str(f))
-                    print(f"[Batch] Converted: {f.name} → {md_path.name}")
-                except Exception as e:
-                    errors.append(f"{f.name}: convert failed: {e}")
+                print(f"[Batch] 跳过转换（启动时不执行）: {f.name}，请手动上传以触发转换")
 
     # ── 阶段 2：以 .md 文件为标的入库 ──────────────────────────
     import config as _cfg
@@ -628,12 +631,16 @@ def _batch_ingest(upload_dir: str, kb_id: str = "knowledge_base"):
     current_size   = _cfg.CHUNK_SIZE
     current_overlap= _cfg.CHUNK_OVERLAP
 
-    for f in sorted(dir_path.iterdir()):
-        if not f.is_file() or f.suffix.lower() != ".md" or f.name.startswith("."):
-            continue
-        if f.name in indexed:
-            skipped += 1
-            continue
+    # 先收集所有待入库的 .md 文件，便于打印进度
+    pending_md = [
+        f for f in sorted(dir_path.iterdir())
+        if f.is_file() and f.suffix.lower() == ".md" and not f.name.startswith(".")
+        and f.name not in indexed
+    ]
+    pending_total = len(pending_md)
+
+    for file_idx, f in enumerate(pending_md, 1):
+        print(f"[Batch:{kb_id}] [{file_idx}/{pending_total}] 入库: {f.name}")
         try:
             texts = parse_document(str(f))
             if not texts:
@@ -1177,26 +1184,58 @@ async def chat(req: ChatRequest):
 
     # 跨多个知识库并行检索，合并结果
     import config as _cfg
+
+    # ── 问题改写：结合历史补全省略指代，提升检索准确率 ──
+    search_question = rewrite_query(req.question, req.chat_history)
+
     all_docs = []
     search_errors = []
+
+    # 改写问题和原问题都用于检索，合并结果
+    # 原因：改写后措辞可能偏离文档用词，原问题保底保证不丢失直接命中
+    search_queries = [search_question]
+    if search_question != req.question:
+        search_queries.append(req.question)
+
     for kb_id in kb_ids:
         try:
             engine = get_rag_engine(kb_id)
             col_count = engine.vector_store.client.get_collection(kb_id).count() if kb_id in [c.name for c in engine.vector_store.client.list_collections()] else 0
-            docs = engine.vector_store.search(req.question, collection_name=kb_id, top_k=_cfg.TOP_K)
-            print(f"[Chat] 知识库 {kb_id}: 集合条目={col_count}, 检索到={len(docs)} 条, TOP_K={_cfg.TOP_K}")
-            import re as _re2
-            for _i, _d in enumerate(docs):
-                _m = _re2.match(r'^\[([^\]]+)\]', _d.page_content.strip())
-                _t = _m.group(1) if _m else _d.page_content[:20].replace('\n', ' ')
-                print(f"  [{_i}] sim={_d.metadata.get('similarity_score',0):.4f} title={_t!r:.40}")
-            all_docs.extend(docs)
+            for q in search_queries:
+                docs = engine.vector_store.search(q, collection_name=kb_id, top_k=_cfg.TOP_K)
+                print(f"[Chat] 知识库 {kb_id} query='{q[:30]}': 检索到={len(docs)} 条")
+                import re as _re2
+                for _i, _d in enumerate(docs):
+                    _m = _re2.match(r'^\[([^\]]+)\]', _d.page_content.strip())
+                    _t = _m.group(1) if _m else _d.page_content[:20].replace('\n', ' ')
+                    print(f"  [{_i}] sim={_d.metadata.get('similarity_score',0):.4f} title={_t!r:.40}")
+                all_docs.extend(docs)
         except Exception as e:
             err_msg = str(e)
             print(f"[Chat] 检索知识库 {kb_id} 时出错: {err_msg}")
             search_errors.append(err_msg)
 
     print(f"[Chat] 合并后总文档数: {len(all_docs)}")
+
+    # ── 相似度过滤：去掉得分极低的噪音文档，避免干扰 rerank ──
+    _sim_threshold = getattr(_cfg, "SIM_THRESHOLD", 0.3)
+    if _sim_threshold > 0:
+        before = len(all_docs)
+        all_docs = [d for d in all_docs if d.metadata.get("similarity_score", 1.0) >= _sim_threshold]
+        if len(all_docs) != before:
+            print(f"[Chat] 相似度过滤: {before} → {len(all_docs)} 条 (阈值={_sim_threshold})")
+
+    # ── 内容去重：多知识库相同文档只保留一份，避免挤占 rerank 名额 ──
+    seen_keys: set = set()
+    deduped = []
+    for d in all_docs:
+        key = d.page_content[:128]
+        if key not in seen_keys:
+            seen_keys.add(key)
+            deduped.append(d)
+    if len(deduped) != len(all_docs):
+        print(f"[Chat] 内容去重: {len(all_docs)} → {len(deduped)} 条")
+    all_docs = deduped
 
     if not all_docs and search_errors:
         # 检索全部失败，返回具体错误原因
@@ -1262,17 +1301,43 @@ async def chat_stream(req: ChatRequest):
 
     # 跨知识库检索（同非流式接口）
     import config as _cfg
+
+    # ── 问题改写 ──
+    search_question = rewrite_query(req.question, req.chat_history)
+
     all_docs = []
     search_errors = []
+
+    # 改写问题和原问题都用于检索，合并结果
+    search_queries = [search_question]
+    if search_question != req.question:
+        search_queries.append(req.question)
+
     for kb_id in kb_ids:
         try:
             engine = get_rag_engine(kb_id)
-            docs = engine.vector_store.search(req.question, collection_name=kb_id, top_k=_cfg.TOP_K)
-            all_docs.extend(docs)
+            for q in search_queries:
+                docs = engine.vector_store.search(q, collection_name=kb_id, top_k=_cfg.TOP_K)
+                all_docs.extend(docs)
         except Exception as e:
             err_msg = str(e)
             print(f"[ChatStream] 检索知识库 {kb_id} 时出错: {err_msg}")
             search_errors.append(err_msg)
+
+    # ── 相似度过滤（同非流式接口）──
+    _sim_threshold = getattr(_cfg, "SIM_THRESHOLD", 0.3)
+    if _sim_threshold > 0:
+        all_docs = [d for d in all_docs if d.metadata.get("similarity_score", 1.0) >= _sim_threshold]
+
+    # ── 内容去重（同非流式接口）──
+    seen_keys: set = set()
+    deduped_stream = []
+    for d in all_docs:
+        key = d.page_content[:128]
+        if key not in seen_keys:
+            seen_keys.add(key)
+            deduped_stream.append(d)
+    all_docs = deduped_stream
 
     session_id = req.session_id or str(uuid.uuid4())
     main_engine = get_rag_engine(kb_ids[0])
@@ -1694,6 +1759,8 @@ async def upload_doc(
     chunk_method: str = None,   # 上传时指定切分方式，None 则使用全局配置
     chunk_size: int = None,     # 上传时指定分块大小，None 则使用全局配置
     chunk_overlap: int = None,  # 上传时指定重叠大小，None 则使用全局配置
+    file_index: int = None,     # 当前文件序号（前端批量上传时传入，用于日志显示）
+    file_total: int = None,     # 批量上传总文件数（前端批量上传时传入，用于日志显示）
 ):
     """
     上传文档接口：接收前端上传的单个文件，转换为 Markdown 并索引到指定知识库的向量库。
@@ -1723,6 +1790,10 @@ async def upload_doc(
     if pure_filename.startswith("~$"):
         raise HTTPException(status_code=400, detail=f"跳过临时文件: {pure_filename}")
 
+    # 打印上传进度
+    _progress = f"[{file_index}/{file_total}] " if file_index and file_total else ""
+    print(f"[Upload] {_progress}{pure_filename} → 知识库「{kb.get('name', kb_id)}」")
+
     try:
         # 保存到对应知识库的上传目录（使用纯文件名，不保留子目录结构）
         kb_upload_dir = get_kb_upload_dir(kb_id)
@@ -1731,6 +1802,25 @@ async def upload_doc(
         raise HTTPException(status_code=400, detail=str(e))
 
     md_path = Path(fpath)
+
+    def _save_failed(md_name: str, reason: str):
+        """上传失败时写入 failed 状态记录，便于前端持久显示失败状态"""
+        # 若 chunk_method 还是 auto（还未被检测），降级为 recursive 存储
+        _method = _chunk_method if _chunk_method != "auto" else "recursive"
+        try:
+            save_doc_chunk_record(
+                kb_id=kb_id, filename=md_name,
+                embed_model=_cfg.EMBED_MODEL,
+                chunk_method=_method,
+                chunk_size=_chunk_size, chunk_overlap=_chunk_overlap,
+                chunk_count=0,
+                index_status="failed",
+                fail_reason=reason,
+            )
+            print(f"[Upload] 已写入失败状态: kb={kb_id}, file={md_name}, reason={reason}")
+        except Exception as ex:
+            print(f"[Upload] 写入失败状态异常: {ex}")
+
     # 若非 md 文件，调用 markitdown 转换
     # 删除已有的同名 .md，强制重新转换（确保 LLM 表格后处理总是执行）
     if md_path.suffix.lower() != ".md":
@@ -1741,6 +1831,7 @@ async def upload_doc(
         try:
             md_path = Path(convert_to_md(fpath))  # convert_to_md 返回字符串，转为 Path
         except Exception as e:
+            _save_failed(Path(fpath).with_suffix(".md").name, f"Markitdown 转换失败: {e}")
             raise HTTPException(status_code=500, detail=f"Markitdown 转换失败: {e}")
 
     # 读取 md 内容并直接传参分块（不覆盖全局 config，线程安全）
@@ -1752,6 +1843,7 @@ async def upload_doc(
 
     texts = parse_document(str(md_path))
     if not texts:
+        _save_failed(md_path.name, "文档为空或无法解析")
         raise HTTPException(status_code=400, detail="文档为空或无法解析")
 
     chunks = chunk_texts(
@@ -1762,6 +1854,7 @@ async def upload_doc(
         chunk_overlap=_chunk_overlap,
     )
     if not chunks:
+        _save_failed(md_path.name, "文档分块失败")
         raise HTTPException(status_code=400, detail="文档分块失败")
 
     # 入库到指定知识库
@@ -1772,15 +1865,17 @@ async def upload_doc(
         import traceback
         print(f"[Upload] ingest_document 失败: {e}")
         traceback.print_exc()
+        _save_failed(md_path.name, f"向量化失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"向量化失败: {str(e)}")
 
-    # 记录本次实际使用的切分配置到 SQLite
+    # 记录本次实际使用的切分配置到 SQLite（成功）
     save_doc_chunk_record(
         kb_id=kb_id, filename=md_path.name,
         embed_model=_cfg.EMBED_MODEL,
         chunk_method=_chunk_method,
         chunk_size=_chunk_size, chunk_overlap=_chunk_overlap,
         chunk_count=len(chunks),
+        index_status="success",
     )
 
     # 更新知识库的索引标记
@@ -1794,28 +1889,40 @@ async def upload_doc(
 @app.get("/api/documents")
 async def get_documents(kb_id: str = "knowledge_base"):
     """
-    查询指定知识库已索引的文档列表（从向量库 metadata 中去重）。
+    查询指定知识库已索引的文档列表。
 
-    查询参数:
-      kb_id: 知识库 ID，默认 "knowledge_base"
-
-    响应体示例：
-      {
-        "documents": [
-          {"name": "2024欣生代产品QA.md", "upload_time": "2024-01-15 10:30:00"}
-        ]
-      }
-
-    upload_time 为文件系统修改时间（mtime），用于前端排序展示。
+    每条文档记录包含 index_status 字段，规则：
+      1. DB 有记录且有 index_status → 使用 DB 值
+      2. DB 有记录但 index_status 为空  → 'success'（兼容旧数据）
+      3. DB 无记录 + md_ready=True      → 'success'（老文档，已成功索引，无切分记录）
+      4. DB 无记录 + md_ready=False     → 'failed'（原始文件存在但 md 转换失败）
     """
     # 验证知识库是否存在
     kb = get_kb(kb_id)
     if not kb:
         raise HTTPException(status_code=404, detail=f"知识库 {kb_id} 不存在")
-    
+
     # 从知识库的上传目录读取文档列表
     kb_upload_dir = get_kb_upload_dir(kb_id)
     docs_list = list_documents(upload_dir=str(kb_upload_dir))
+
+    # 构建 DB 切分记录 map：md_filename → record
+    db_records = {r["filename"]: r for r in list_doc_chunk_records(kb_id)}
+
+    for doc in docs_list:
+        md_name = doc.get("md_filename") or (
+            doc["filename"].rsplit(".", 1)[0] + ".md"
+        )
+        rec = db_records.get(md_name)
+        if rec:
+            # 规则 1 / 2
+            doc["index_status"] = rec.get("index_status") or "success"
+            doc["fail_reason"]  = rec.get("fail_reason") or ""
+        else:
+            # 规则 3 / 4
+            doc["index_status"] = "success" if doc.get("md_ready", False) else "failed"
+            doc["fail_reason"]  = "" if doc.get("md_ready", False) else "文档转换失败或内容为空"
+
     return {"documents": docs_list}
 
 
@@ -1842,6 +1949,11 @@ async def get_chunk_records(kb_id: str = "knowledge_base"):
             r["chunk_size"]    == cur_size   and
             r["chunk_overlap"] == cur_overlap
         )
+        # 旧记录没有 index_status 字段时默认成功
+        if "index_status" not in r or r["index_status"] is None:
+            r["index_status"] = "success"
+        if "fail_reason" not in r or r["fail_reason"] is None:
+            r["fail_reason"] = ""
     return {"records": records, "total": len(records)}
 
 

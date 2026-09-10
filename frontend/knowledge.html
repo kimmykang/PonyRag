@@ -195,7 +195,7 @@
                 </button>
             </div>
 
-            <div class="modal-body" style="padding: 20px;">
+            <div class="modal-body">
                 <!-- 工具栏 -->
                 <div class="docs-toolbar">
                     <input type="file" id="docsFileInput" accept=".pdf,.docx,.doc,.txt,.md,.xlsx,.xls,.pptx,.ppt" multiple hidden>
@@ -221,6 +221,15 @@
                         </svg>
                         <span id="docsBatchDeleteText" data-i18n="docs.batchDelete">批量删除</span>
                     </button>
+                    <!-- 文件搜索框 -->
+                    <div class="docs-search-wrap">
+                        <svg class="docs-search-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="11" cy="11" r="8"></circle>
+                            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                        </svg>
+                        <input type="text" id="docsSearchInput" class="docs-search-input" placeholder="搜索文件名…" autocomplete="off">
+                        <button class="docs-search-clear" id="docsSearchClear" title="清除" style="display:none;">×</button>
+                    </div>
                 </div>
 
                 <!-- 切分参数面板（折叠） -->
@@ -350,7 +359,7 @@
                         <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path>
                     </svg>
                 </div>
-                <p id="deleteDocModalBody" style="word-break:break-all; margin-bottom:8px;"></p>
+                <p id="deleteDocModalBody" style="word-break:break-all; margin-bottom:8px; white-space:pre-wrap; max-height:200px; overflow-y:auto;"></p>
                 <p style="font-size:0.85rem; color:var(--text-secondary);" data-i18n="docs.delete.hint">此操作不可恢复。</p>
             </div>
             <div class="modal-actions">
@@ -379,7 +388,8 @@
                     <div id="uploadFailedItems" style="
                         max-height: 240px;
                         overflow-y: auto;
-                        background: var(--bg-secondary, #f8f8f8);
+                        background: var(--bg);
+                        border: 1px solid var(--border);
                         border-radius: 6px;
                         padding: 8px 12px;
                         font-size: 0.875rem;

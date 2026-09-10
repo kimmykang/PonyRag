@@ -32,6 +32,10 @@ OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 # 对话模型：用于生成最终回答，推荐使用支持中文的大模型
 CHAT_MODEL: str = os.getenv("CHAT_MODEL", "qwen3.6:27b")
 
+# 问题改写模型：用于多轮对话中补全省略指代（建议用小模型加速）
+# 留空则使用 CHAT_MODEL；推荐配置一个 1~4B 的小模型，如 qwen3:1.7b
+REWRITE_MODEL: str = os.getenv("REWRITE_MODEL", "")
+
 # 嵌入模型：将文本转为向量，用于语义检索；维度需与已建库的维度一致
 EMBED_MODEL: str = os.getenv("EMBED_MODEL", "qwen3-embedding:4b")
 
@@ -67,10 +71,16 @@ TOP_K: int = int(os.getenv("TOP_K", "10"))
 RERANK_TOP_K: int = int(os.getenv("RERANK_TOP_K", "5"))
 
 # 文档分块大小（token 数），影响每块携带的信息密度
-CHUNK_SIZE: int = int(os.getenv("CHUNK_SIZE", "500"))
+# 推荐值随嵌入模型调整：
+#   qwen3-embedding:0.6b / 1.7b  →  500~800
+#   qwen3-embedding:4b            →  800~1200
+#   qwen3-embedding:8b            →  1000~1500
+#   nomic-embed-text / bge-m3    →  400~600
+CHUNK_SIZE: int = int(os.getenv("CHUNK_SIZE", "1000"))
 
 # 相邻分块的重叠 token 数，防止语义断裂
-CHUNK_OVERLAP: int = int(os.getenv("CHUNK_OVERLAP", "50"))
+# 建议为 CHUNK_SIZE 的 15%，默认 150（对应 CHUNK_SIZE=1000）
+CHUNK_OVERLAP: int = int(os.getenv("CHUNK_OVERLAP", "150"))
 
 # 文档分块方式：
 #   recursive  — 递归字符切分（默认，按标点/空行逐级细分）
@@ -81,8 +91,24 @@ CHUNK_METHOD: str = os.getenv("CHUNK_METHOD", "recursive")
 # 送入 LLM 的最大参考知识字符数
 CONTEXT_LIMIT: int = int(os.getenv("CONTEXT_LIMIT", "20000"))
 
+# 召回文档的最低相似度门槛：低于此值的文档在进入 rerank 前被过滤
+# 取值 0~1，设为 0 表示不过滤；ChromaDB 的余弦距离转换后通常在 0.2~1.0
+SIM_THRESHOLD: float = float(os.getenv("SIM_THRESHOLD", "0.3"))
+
 # 模型思考模式：True 开启 thinking，False 关闭（默认关闭）
 THINKING: bool = os.getenv("THINKING", "false").lower() == "true"
+
+# 启动时自动索引：True 表示启动时自动将未入库的 .md 文件向量化入库
+# 默认关闭，避免重启时与正在进行的上传任务竞争资源
+# 需要断点续传功能时可设为 true
+STARTUP_INGEST: bool = os.getenv("STARTUP_INGEST", "false").lower() == "true"
+
+# 语义切分的相似度跳变阈值：相邻句子余弦相似度低于此值时切断
+# 不同嵌入模型的相似度范围差异较大，建议根据实际模型调整：
+#   qwen3-embedding 系列：推荐 0.60~0.70
+#   nomic-embed-text：    推荐 0.70~0.78
+#   bge-m3：              推荐 0.65~0.75
+SEMANTIC_THRESHOLD: float = float(os.getenv("SEMANTIC_THRESHOLD", "0.65"))
 
 # ──────────────────────────────────────────────────────────────
 # 初始化：确保必要目录存在

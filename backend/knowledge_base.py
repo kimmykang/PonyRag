@@ -77,15 +77,34 @@ def init_kb_table():
                 chunk_size    INTEGER  NOT NULL DEFAULT 500,
                 chunk_overlap INTEGER  NOT NULL DEFAULT 50,
                 chunk_count   INTEGER  NOT NULL DEFAULT 0,
+                index_status  TEXT     NOT NULL DEFAULT 'success',
+                fail_reason   TEXT     NOT NULL DEFAULT '',
                 indexed_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(kb_id, filename)
             )
         """)
+        # 兼容旧数据库：若 index_status 列不存在则新增（默认 success）
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_doc_chunks_kb
             ON document_chunks (kb_id)
         """)
         conn.commit()
+
+    # 兼容旧数据库：在独立连接里尝试添加 index_status 列（列已存在时 SQLite 会报错，安全忽略）
+    try:
+        with _conn() as _mc:
+            _mc.execute("ALTER TABLE document_chunks ADD COLUMN index_status TEXT NOT NULL DEFAULT 'success'")
+            _mc.commit()
+    except Exception:
+        pass  # 列已存在，正常跳过
+
+    # 兼容旧数据库：添加 fail_reason 列
+    try:
+        with _conn() as _mc:
+            _mc.execute("ALTER TABLE document_chunks ADD COLUMN fail_reason TEXT NOT NULL DEFAULT ''")
+            _mc.commit()
+    except Exception:
+        pass
 
     # 确保默认知识库存在
     if not get_kb("knowledge_base"):
@@ -257,6 +276,8 @@ def save_doc_chunk_record(
     chunk_size: int,
     chunk_overlap: int,
     chunk_count: int,
+    index_status: str = "success",
+    fail_reason: str = "",
 ):
     """
     保存或更新文档的切分记录。
@@ -272,21 +293,25 @@ def save_doc_chunk_record(
         chunk_size:   分块大小
         chunk_overlap:重叠大小
         chunk_count:  实际切出块数
+        index_status: 索引状态（success/failed）
+        fail_reason:  失败原因（index_status='failed' 时填入）
     """
     now = datetime.now().isoformat(timespec="seconds")
     with _conn() as conn:
         conn.execute("""
             INSERT INTO document_chunks
-                (kb_id, filename, embed_model, chunk_method, chunk_size, chunk_overlap, chunk_count, indexed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (kb_id, filename, embed_model, chunk_method, chunk_size, chunk_overlap, chunk_count, index_status, fail_reason, indexed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(kb_id, filename) DO UPDATE SET
                 embed_model   = excluded.embed_model,
                 chunk_method  = excluded.chunk_method,
                 chunk_size    = excluded.chunk_size,
                 chunk_overlap = excluded.chunk_overlap,
                 chunk_count   = excluded.chunk_count,
+                index_status  = excluded.index_status,
+                fail_reason   = excluded.fail_reason,
                 indexed_at    = excluded.indexed_at
-        """, (kb_id, filename, embed_model, chunk_method, chunk_size, chunk_overlap, chunk_count, now))
+        """, (kb_id, filename, embed_model, chunk_method, chunk_size, chunk_overlap, chunk_count, index_status, fail_reason, now))
         conn.commit()
 
 

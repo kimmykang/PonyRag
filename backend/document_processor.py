@@ -6,7 +6,7 @@
 完整上传流程：
   1. 用户上传原始文件（PDF / DOCX / XLSX / PPTX / TXT / MD）
   2. 调用 markitdown Python API 将原始文件转换为 .md 格式
-     - 若配置了 OCR_MODEL，启用 markitdown-ocr 插件，自动 OCR 图片型文档
+     - 若配置了 _dp_cfg.OCR_MODEL，启用 markitdown-ocr 插件，自动 OCR 图片型文档
      - 若源文件本身是 .md，跳过转换
   3. 以生成的 .md 文件为标的，使用 tiktoken 分块
   4. 将分块结果写入 ChromaDB 向量库（由 vector_store.py 完成）
@@ -25,7 +25,8 @@ from typing import List
 
 from langchain_community.document_loaders import TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from config import CHUNK_SIZE, CHUNK_OVERLAP, UPLOAD_DIR, OLLAMA_BASE_URL, OCR_MODEL, EMBED_MODEL
+from config import CHUNK_SIZE, CHUNK_OVERLAP, UPLOAD_DIR, OLLAMA_BASE_URL, EMBED_MODEL
+import config as _dp_cfg  # used for dynamic _dp_cfg.OCR_MODEL lookup
 
 # ──────────────────────────────────────────────────────────────
 # 支持的文件格式集合
@@ -119,14 +120,14 @@ def _ocr_pdf_with_vision(pdf_path: str) -> str:
         提取到的 Markdown 文本；失败时返回空字符串
     """
     try:
-        import fitz  # PyMuPDF
+        import pymupdf as fitz  # PyMuPDF (fitz is the legacy alias)
     except ImportError:
         print(f"[Convert] PyMuPDF 未安装，OCR 降级跳过。可运行: pip install pymupdf")
         return ""
 
     import base64, httpx as _httpx
 
-    print(f"[Convert] 图片型 PDF，启动 OCR 视觉模型: {Path(pdf_path).name}")
+    print(f"[Convert] 图片型 PDF，启动 OCR 视觉模型: {_dp_cfg.OCR_MODEL}  文件: {Path(pdf_path).name}")
     all_pages_md = []
 
     doc = fitz.open(pdf_path)
@@ -148,11 +149,11 @@ def _ocr_pdf_with_vision(pdf_path: str) -> str:
         )
 
         try:
-            with _httpx.Client(transport=_httpx.HTTPTransport(), timeout=120) as client:
+            with _httpx.Client(transport=_httpx.HTTPTransport(), timeout=60) as client:
                 resp = client.post(
                     f"{OLLAMA_BASE_URL}/api/generate",
                     json={
-                        "model": OCR_MODEL,
+                        "model": _dp_cfg.OCR_MODEL,
                         "prompt": prompt,
                         "images": [img_b64],
                         "stream": False,
@@ -263,17 +264,52 @@ def _convert_pdf_smart(pdf_path: str) -> str:
             if page_md_parts:
                 all_pages_md.append(f"## Page {page_num}\n\n" + "\n\n".join(page_md_parts))
                 text_page_count += 1
+            elif _dp_cfg.OCR_MODEL:
+                # ── 逐页 OCR 降级：本页 pdfplumber 未提取到内容，单独 OCR ──
+                # 失败时自动重试 3 次（间隔 30 秒），应对模型被占用导致的超时
+                print(f"[Convert]   第{page_num}页无文字内容，启动单页 OCR（模型: {_dp_cfg.OCR_MODEL}）...")
+                import pymupdf as _fitz, base64 as _b64, httpx as _httpx2, time as _time
+                _doc = _fitz.open(pdf_path)
+                _page = _doc[page_num - 1]
+                _mat = _fitz.Matrix(2, 2)
+                _pix = _page.get_pixmap(matrix=_mat)
+                _img_b64 = _b64.b64encode(_pix.tobytes("png")).decode("utf-8")
+                _doc.close()
+
+                _ocr_prompt = (
+                    "请识别图片中的所有文字内容，保持原始格式。"
+                    "如有表格，用 Markdown 表格格式输出；如有标题，用 # 标记。"
+                    "只输出识别到的文字内容，不要额外说明。"
+                )
+
+                _page_text = ""
+                try:
+                    with _httpx2.Client(transport=_httpx2.HTTPTransport(), timeout=60) as _client:
+                        _resp = _client.post(
+                            f"{OLLAMA_BASE_URL}/api/generate",
+                            json={
+                                "model": _dp_cfg.OCR_MODEL,
+                                "prompt": _ocr_prompt,
+                                "images": [_img_b64],
+                                "stream": False,
+                                "options": {"temperature": 0},
+                            },
+                        )
+                        _resp.raise_for_status()
+                        _page_text = _resp.json().get("response", "").strip()
+                except Exception as _ocr_e:
+                    print(f"[Convert]   第{page_num}页 OCR 失败: {_ocr_e}")
+
+                if _page_text:
+                    all_pages_md.append(f"## Page {page_num}\n\n{_page_text}")
+                    print(f"[Convert]   第{page_num}页 OCR: {len(_page_text)} 字符")
+                else:
+                    print(f"[Convert]   第{page_num}页 OCR: 未识别到内容")
 
     result = "\n\n".join(all_pages_md)
     print(f"[Convert]   转换完成: {len(result)} 字符，文字页={text_page_count}/{total}")
 
-    # ── 关键修复：图片型 PDF 降级到 OCR ──────────────────────────
-    # 如果整个 PDF 没有提取到任何文字（纯扫描件），且配置了 OCR 视觉模型，
-    # 自动降级到逐页 OCR，避免返回空内容导致上传失败
-    if not result.strip() and OCR_MODEL:
-        print(f"[Convert]   未提取到文字，判断为图片型 PDF，启动 OCR 降级...")
-        result = _ocr_pdf_with_vision(pdf_path)
-
+    # 注意：图片页已在逐页处理阶段单独 OCR，无需整体降级
     return result
 
 
@@ -361,7 +397,7 @@ def convert_to_md(src_path: str) -> str:
       1. 若源文件已是 .md，直接返回
       2. 若同名 .md 已存在，直接复用（幂等）
       3. 优先使用 markitdown Python API 转换：
-         - 若配置了 OCR_MODEL，启用 markitdown-ocr 插件，
+         - 若配置了 _dp_cfg.OCR_MODEL，启用 markitdown-ocr 插件，
            自动对图片型 PDF/扫描件进行 OCR
          - OCR 使用本地 Ollama（OpenAI 兼容接口），无需联网
       4. Python API 失败时回退到 CLI 命令行
@@ -396,7 +432,7 @@ def convert_to_md(src_path: str) -> str:
 
         suffix = src.suffix.lower()
 
-        if suffix == ".pdf" and OCR_MODEL:
+        if suffix == ".pdf" and _dp_cfg.OCR_MODEL:
             text = _convert_pdf_smart(str(src))
             if not text.strip():
                 # _convert_pdf_smart 内部已尝试 OCR 降级，仍为空则真的无内容
@@ -669,6 +705,7 @@ def _chunk_by_semantic(texts: List[str], chunk_size: int = None, chunk_overlap: 
 
     # ── 计算相邻余弦相似度，找切割点 ──────────────────────────
     import math
+    from config import SEMANTIC_THRESHOLD
 
     def _cosine(a: List[float], b: List[float]) -> float:
         dot = sum(x * y for x, y in zip(a, b))
@@ -676,13 +713,12 @@ def _chunk_by_semantic(texts: List[str], chunk_size: int = None, chunk_overlap: 
         nb  = math.sqrt(sum(x * x for x in b))
         return dot / (na * nb) if na * nb > 0 else 0.0
 
-    THRESHOLD = 0.72
     segments: List[str] = []
     current: List[str] = [all_sentences[0]]
 
     for i in range(1, len(all_sentences)):
         sim = _cosine(embeddings[i - 1], embeddings[i])
-        if sim < THRESHOLD:
+        if sim < SEMANTIC_THRESHOLD:
             segments.append("".join(current))
             current = [all_sentences[i]]
         else:
@@ -744,8 +780,21 @@ def upload_file(file, filename: str = None, upload_dir: str = None) -> str:
     raw_path.parent.mkdir(parents=True, exist_ok=True)
 
     content = file.file.read()
-    with open(raw_path, "wb") as f:
-        f.write(content)
+
+    # Windows 文件锁处理：如果文件正被其他进程占用（如 _batch_ingest 的 OCR），
+    # 等待后重试，最多 3 次
+    import time as _time_upload
+    for _attempt in range(3):
+        try:
+            with open(raw_path, "wb") as f:
+                f.write(content)
+            break  # 写入成功
+        except PermissionError:
+            if _attempt < 2:
+                print(f"[Upload] 文件被占用，等待重试 ({_attempt+1}/3): {filename}")
+                _time_upload.sleep(2)
+            else:
+                raise  # 3 次都失败，向上抛出
 
     return str(raw_path)
 

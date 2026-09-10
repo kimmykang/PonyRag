@@ -22,6 +22,10 @@ const state = {
     currentDocsKbId: null, // 当前正在管理文档的知识库 ID
     documents: [], // 当前知识库的文档列表
     selectedDocs: new Set(), // 选中的文档名集合
+    uploadStatusMap: {}, // 上传状态记录：{ filename: { ok: bool, reason: string } }
+    sortKey: 'upload_time', // 当前排序字段：name | chunk_method | upload_time | index_status
+    sortDir: 'desc', // 排序方向：asc | desc
+    docsSearchQuery: '', // 文档搜索关键词
 };
 
 // DOM 元素引用
@@ -99,6 +103,26 @@ function initEventListeners() {
     document.getElementById('docsModal').addEventListener('click', (e) => {
         if (e.target.id === 'docsModal') closeDocsModal();
     });
+
+    // 文档搜索框
+    const searchInput = document.getElementById('docsSearchInput');
+    const searchClear = document.getElementById('docsSearchClear');
+    if (searchInput) {
+        searchInput.addEventListener('input', () => {
+            state.docsSearchQuery = searchInput.value.trim();
+            searchClear.style.display = state.docsSearchQuery ? 'flex' : 'none';
+            renderDocuments();
+        });
+    }
+    if (searchClear) {
+        searchClear.addEventListener('click', () => {
+            searchInput.value = '';
+            state.docsSearchQuery = '';
+            searchClear.style.display = 'none';
+            searchInput.focus();
+            renderDocuments();
+        });
+    }
 
     // 切分参数面板：切分方式切换时动态显隐大小/重叠输入框，更新徽章
     const uploadMethodSel = document.getElementById('uploadChunkMethod');
@@ -476,6 +500,12 @@ async function openDocsModal(kbId) {
 
     state.currentDocsKbId = kbId;
     state.selectedDocs.clear();
+    state.uploadStatusMap = {}; // 切换知识库时清空上传状态
+    state.docsSearchQuery = ''; // 清空搜索
+    const _si = document.getElementById('docsSearchInput');
+    const _sc = document.getElementById('docsSearchClear');
+    if (_si) _si.value = '';
+    if (_sc) _sc.style.display = 'none';
 
     // 设置标题
     const titleEl = document.getElementById('docsModalTitle');
@@ -596,6 +626,7 @@ function renderDocuments() {
                     <th>${t('docs.colName')}</th>
                     <th style="width: 130px;">${t('docs.colChunk')}</th>
                     <th style="width: 180px;">${t('docs.colTime')}</th>
+                    <th style="width: 90px; text-align: center;">状态</th>
                     <th style="width: 80px; text-align: center;">${t('docs.colAction')}</th>
                 </tr>
             </thead>
@@ -652,6 +683,20 @@ function renderDocuments() {
                 </td>
                 <td class="doc-time-cell">
                     ${doc.upload_time || '未知'}
+                </td>
+                <td class="doc-status-cell">
+                    ${(() => {
+                        const s = state.uploadStatusMap[doc.name];
+                        if (s) {
+                            return s.ok
+                                ? '<span class="doc-status-badge status-success">成功</span>'
+                                : '<span class="doc-status-badge status-failed" title="' + s.reason.replace(/"/g, '') + '">失败</span>';
+                        }
+                        const dbStatus = doc.index_status || 'success';
+                        if (dbStatus === 'success') return '<span class="doc-status-badge status-success">成功</span>';
+                        if (dbStatus === 'failed')  return '<span class="doc-status-badge status-failed" title="' + (doc.fail_reason || '').replace(/"/g, '') + '">失败</span>';
+                        return '<span class="doc-status-badge status-success">成功</span>';
+                    })()}
                 </td>
                 <td style="text-align: center;">
                     <button class="icon-btn doc-delete-btn" onclick="window.deleteSingleDocument('${safeName}')" title="删除">
@@ -851,7 +896,7 @@ async function handleDocsUpload(event) {
                 progressText.textContent = `(${i + 1}/${files.length}) ${file.name}`;
             }
 
-            let uploadUrl = `${API_BASE}/api/upload?kb_id=${encodeURIComponent(kbId)}`;
+            let uploadUrl = `${API_BASE}/api/upload?kb_id=${encodeURIComponent(kbId)}&file_index=${i + 1}&file_total=${files.length}`;
             if (chunkMethod && chunkMethod !== 'auto') uploadUrl += `&chunk_method=${encodeURIComponent(chunkMethod)}`;
             if (chunkSize) uploadUrl += `&chunk_size=${encodeURIComponent(chunkSize)}`;
             if (chunkOverlap) uploadUrl += `&chunk_overlap=${encodeURIComponent(chunkOverlap)}`;
@@ -864,18 +909,32 @@ async function handleDocsUpload(event) {
             const data = await res.json();
 
             if (!res.ok) {
+                const reason = data.detail || data.message || `HTTP ${res.status}`;
                 failed.push({
                     name: file.name,
-                    reason: data.detail || data.message || `HTTP ${res.status}`
+                    reason
                 });
+                state.uploadStatusMap[file.name] = {
+                    ok: false,
+                    reason
+                };
             } else {
                 succeeded++;
+                state.uploadStatusMap[file.name] = {
+                    ok: true,
+                    reason: ''
+                };
             }
         } catch (e) {
+            const reason = '网络错误: ' + e.message;
             failed.push({
                 name: file.name,
-                reason: '网络错误: ' + e.message
+                reason
             });
+            state.uploadStatusMap[file.name] = {
+                ok: false,
+                reason
+            };
         }
     }
 
@@ -938,11 +997,11 @@ function showUploadResult(succeeded, total, failed, skippedFiles) {
 
     if (allIssues.length > 0) {
         failedItems.innerHTML = allIssues.map(f => `
-            <div style="padding: 6px 0; border-bottom: 1px solid var(--border-color, #eee); display:flex; gap:8px; align-items:flex-start;">
-                <span style="flex-shrink:0; font-size:0.9rem;">${f.type === 'failed' ? '❌' : '⏭️'}</span>
-                <div style="min-width:0;">
-                    <div style="font-weight:500; word-break:break-all; font-size:0.875rem;">${escapeHtml(f.name)}</div>
-                    <div style="color: var(--text-secondary); font-size:0.8rem;">${escapeHtml(f.reason)}</div>
+            <div style="padding: 7px 0; border-bottom: 1px solid var(--border); display:flex; gap:10px; align-items:flex-start;">
+                <span style="flex-shrink:0; font-size:0.95rem; line-height:1.4;">${f.type === 'failed' ? '❌' : '⏭️'}</span>
+                <div style="min-width:0; flex:1;">
+                    <div style="font-weight:600; word-break:break-all; font-size:0.875rem; color:var(--text);">${escapeHtml(f.name)}</div>
+                    <div style="color:var(--text-secondary); font-size:0.8rem; margin-top:2px;">${escapeHtml(f.reason)}</div>
                 </div>
             </div>
         `).join('');
@@ -984,7 +1043,16 @@ async function handleBatchDelete() {
     if (!kb) return;
 
     const count = state.selectedDocs.size;
-    const fileList = Array.from(state.selectedDocs).map(name => `• ${name}`).join('\n');
+    // 文件名超过 5 个时只显示前 5 个并提示剩余数量，避免对话框内容过长
+    const allNames = Array.from(state.selectedDocs);
+    const MAX_SHOW = 5;
+    let fileList;
+    if (allNames.length <= MAX_SHOW) {
+        fileList = allNames.map(name => `• ${name}`).join('\n');
+    } else {
+        fileList = allNames.slice(0, MAX_SHOW).map(name => `• ${name}`).join('\n') +
+            `\n• ... 等共 ${count} 个文件`;
+    }
     const bodyText = t('docs.batchDelete.confirm', {
         kb: kb.name,
         count: count
@@ -1082,6 +1150,19 @@ window.toggleSelectAll = toggleSelectAll;
 window.deleteSingleDocument = deleteSingleDocument;
 window.closeUploadResult = closeUploadResult;
 window.closeDeleteDocModal = closeDeleteDocModal;
+
+// 表格列排序
+window.sortDocs = function(key) {
+    if (state.sortKey === key) {
+        // 同一列再次点击：切换升降序
+        state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+        state.sortKey = key;
+        // 时间默认降序（最新在前），其他默认升序
+        state.sortDir = key === 'upload_time' ? 'desc' : 'asc';
+    }
+    renderDocuments();
+};
 
 // 测试函数：直接打开弹窗
 window.testModalOpen = function() {
@@ -1315,6 +1396,9 @@ async function loadDocuments(kbId) {
                 chunk_size: rec ? rec.chunk_size : null,
                 chunk_count: rec ? rec.chunk_count : null,
                 up_to_date: rec ? rec.up_to_date : null,
+                // index_status 由后端 /api/documents 直接注入，已按四条规则判断好
+                index_status: doc.index_status || (doc.md_ready ? 'success' : 'failed'),
+                fail_reason: doc.fail_reason || '',
             };
         });
 
@@ -1358,6 +1442,29 @@ function renderDocuments() {
         return;
     }
 
+    // ── 排序 ──────────────────────────────────────────────────
+    const sorted = [...state.documents].sort((a, b) => {
+        let va = a[state.sortKey] || '';
+        let vb = b[state.sortKey] || '';
+        // 数值比较（上传时间字符串按字典序已正确，状态/名称按字典序）
+        const cmp = String(va).localeCompare(String(vb), 'zh-CN', {
+            numeric: true
+        });
+        return state.sortDir === 'asc' ? cmp : -cmp;
+    });
+
+    // ── 搜索过滤 ───────────────────────────────────────────────
+    const q = state.docsSearchQuery.toLowerCase();
+    const filtered = q ? sorted.filter(doc => doc.name.toLowerCase().includes(q)) : sorted;
+
+    // 排序箭头 helper
+    const arrow = (key) => {
+        if (state.sortKey !== key) return '<span class="sort-arrow sort-none">⇅</span>';
+        return state.sortDir === 'asc' ?
+            '<span class="sort-arrow sort-asc">↑</span>' :
+            '<span class="sort-arrow sort-desc">↓</span>';
+    };
+
     const METHOD_LABEL = {
         'fixed': `✂️ ${t('chunk.fixed.short')}`,
         'recursive': `🔀 ${t('chunk.recursive.short')}`,
@@ -1373,15 +1480,16 @@ function renderDocuments() {
                         <input type="checkbox" id="selectAllDocs" onchange="window.toggleSelectAll()">
                     </th>
                     <th style="width: 60px;"></th>
-                    <th>${t('docs.colName')}</th>
-                    <th style="width: 130px;">${t('docs.colChunk')}</th>
-                    <th style="width: 180px;">${t('docs.colTime')}</th>
+                    <th class="sortable-th" onclick="window.sortDocs('name')">${t('docs.colName')} ${arrow('name')}</th>
+                    <th class="sortable-th" style="width: 130px;" onclick="window.sortDocs('chunk_method')">${t('docs.colChunk')} ${arrow('chunk_method')}</th>
+                    <th class="sortable-th" style="width: 180px;" onclick="window.sortDocs('upload_time')">${t('docs.colTime')} ${arrow('upload_time')}</th>
+                    <th class="sortable-th" style="width: 90px; text-align: center;" onclick="window.sortDocs('index_status')">状态 ${arrow('index_status')}</th>
                     <th style="width: 80px; text-align: center;">${t('docs.colAction')}</th>
                 </tr>
             </thead>
             <tbody>`;
 
-    state.documents.forEach(doc => {
+    filtered.forEach(doc => {
         if (!doc || !doc.name) return;
 
         const isSelected = state.selectedDocs.has(doc.name);
@@ -1425,6 +1533,21 @@ function renderDocuments() {
                     }
                 </td>
                 <td class="doc-time-cell">${doc.upload_time || t('unknown')}</td>
+                <td class="doc-status-cell">
+                    ${(() => {
+                        // 优先用数据库里的 index_status，上传过程中如有临时状态则覆盖
+                        const s = state.uploadStatusMap[doc.name];
+                        if (s) {
+                            return s.ok
+                                ? '<span class="doc-status-badge status-success">成功</span>'
+                                : '<span class="doc-status-badge status-failed" title="' + s.reason.replace(/"/g, '') + '">失败</span>';
+                        }
+                        const dbStatus = doc.index_status || 'success';
+                        if (dbStatus === 'success') return '<span class="doc-status-badge status-success">成功</span>';
+                        if (dbStatus === 'failed')  return '<span class="doc-status-badge status-failed" title="' + (doc.fail_reason || '').replace(/"/g, '') + '">失败</span>';
+                        return '<span class="doc-status-badge status-success">成功</span>';
+                    })()}
+                </td>
                 <td style="text-align: center; white-space: nowrap;">
                     <button class="icon-btn" onclick="window.openChunkBrowser('${safeName}', '${state.currentDocsKbId || 'knowledge_base'}')" title="${t('chunk.browser.viewBtn')}" style="margin-right:2px;">
                         <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
@@ -1445,6 +1568,12 @@ function renderDocuments() {
             </tr>`;
     });
 
+    // 搜索无结果提示行
+    if (filtered.length === 0 && q) {
+        tableHTML += `<tr><td colspan="7" style="text-align:center; padding:24px; color:var(--text-secondary); font-size:0.9rem;">
+            未找到包含 "<strong style="color:var(--text);">${q.replace(/</g,'&lt;')}</strong>" 的文件
+        </td></tr>`;
+    }
     tableHTML += '</tbody></table>';
     docsList.innerHTML = tableHTML;
     updateBatchDeleteBtn();
