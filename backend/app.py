@@ -67,7 +67,7 @@ from document_processor import (
     parse_document, chunk_texts, upload_file, list_documents, cleanup_document,
     convert_to_md, ALLOWED_EXTENSIONS, auto_detect_chunk_method,
 )
-from rag_engine import RagEngine, rewrite_query
+from rag_engine import RagEngine, rewrite_query, preload_cross_encoder
 from vector_store import VectorStoreManager
 from chat_history import (
     init_db, save_message, get_history, clear_history,
@@ -218,19 +218,25 @@ def _ensure_model(key: str, model_name: str):
     # 步骤 2：预热 - 发送小请求让模型加载到显存
     _set_model_status(key, "loading", f"正在加载 {model_name} 到显存...")
     try:
+        import config as _warmup_cfg
         with _ollama_client() as client:
             if key == "embed":
                 # 嵌入模型使用 /api/embeddings 预热
                 client.post(
                     f"{OLLAMA_BASE_URL}/api/embeddings",
-                    json={"model": model_name, "prompt": "hi"},
+                    json={"model": model_name, "prompt": "hi",
+                          "keep_alive": _warmup_cfg.OLLAMA_KEEP_ALIVE},
                     timeout=120,
                 )
             elif key in ("chat", "rerank"):
                 # 对话/Rerank 模型使用 /api/generate 预热
+                # num_ctx 必须与后续真实请求一致，否则 Ollama 会在首次提问时
+                # 检测到 num_ctx 变化，触发完整卸载重载，导致显存清空再加载
                 client.post(
                     f"{OLLAMA_BASE_URL}/api/generate",
-                    json={"model": model_name, "prompt": "hi", "stream": False},
+                    json={"model": model_name, "prompt": "hi", "stream": False,
+                          "keep_alive": _warmup_cfg.OLLAMA_KEEP_ALIVE,
+                          "options": {"num_ctx": _warmup_cfg.NUM_CTX}},
                     timeout=120,
                 )
         _set_model_status(key, "ready", "已就绪")
@@ -402,6 +408,12 @@ async def lifespan(app: FastAPI):
 
     # 检查 embedding 模型配置一致性
     _check_embed_model_consistency()
+
+    # 预加载 CrossEncoder 到 GPU（RERANK_METHOD=cross_encoder 时生效）
+    # 必须在 Ollama 模型加载线程启动之前完成，确保 CrossEncoder 先占住显存，
+    # 后续 Ollama 加载大模型时不会把 CrossEncoder 挤出显存导致每次 rerank 时
+    # chat 模型被反复卸载/重载
+    preload_cross_encoder()
 
     # 后台线程启动模型检查（daemon=True 确保主进程退出时线程也终止）
     t = threading.Thread(
@@ -916,6 +928,12 @@ def _check_embed_model_consistency():
         _purge_vector_db()
         # 重建完成后写入新的 .embed_model（在重索引线程完成后写）
         def _reindex_and_mark():
+            """
+            重索引完成后写入 .embed_model 标记文件。
+
+            先调 _reindex_all_documents() 完成全量重索引，再将当前 EMBED_MODEL
+            写入标记文件，以便下次启动时判断 embedding 模型是否变更。
+            """
             _reindex_all_documents()
             try:
                 vector_db_path.mkdir(parents=True, exist_ok=True)
@@ -1240,6 +1258,9 @@ async def chat(req: ChatRequest):
         print(f"[Chat] 内容去重: {len(all_docs)} → {len(deduped)} 条")
     all_docs = deduped
 
+    # 去重后按相似度降序排列，保证 rerank 拿到的候选集质量最优
+    all_docs.sort(key=lambda d: d.metadata.get("similarity_score", 0), reverse=True)
+
     if not all_docs and search_errors:
         # 检索全部失败，返回具体错误原因
         first_err = search_errors[0]
@@ -1296,6 +1317,7 @@ async def chat_stream(req: ChatRequest):
         enabled = list_enabled_kbs()
         if not enabled:
             async def _no_kb():
+                """无可用知识库时立即返回错误消息的 SSE 生成器"""
                 msg = _json.dumps({"done": True, "sources": [], "has_knowledge": False,
                                    "answer": "暂无可用的知识库。", "session_id": req.session_id or str(uuid.uuid4())}, ensure_ascii=False)
                 yield f"data: {msg}\n\n"
@@ -1342,6 +1364,9 @@ async def chat_stream(req: ChatRequest):
             deduped_stream.append(d)
     all_docs = deduped_stream
 
+    # 去重后按相似度降序排列，保证 rerank 拿到的候选集质量最优
+    all_docs.sort(key=lambda d: d.metadata.get("similarity_score", 0), reverse=True)
+
     session_id = req.session_id or str(uuid.uuid4())
     main_engine = get_rag_engine(kb_ids[0])
 
@@ -1359,6 +1384,7 @@ async def chat_stream(req: ChatRequest):
             err_hint = f"检索失败: {first_err}"
 
         async def _err_stream():
+            """检索全部失败时立即返回错误消息的 SSE 生成器"""
             yield f"data: {_json.dumps({'error': err_hint}, ensure_ascii=False)}\n\n"
             done_msg = {"done": True, "sources": [], "has_knowledge": False, "session_id": session_id}
             yield f"data: {_json.dumps(done_msg, ensure_ascii=False)}\n\n"
@@ -1366,6 +1392,12 @@ async def chat_stream(req: ChatRequest):
         return _SR(_err_stream(), media_type="text/event-stream")
 
     async def _generate():
+        """
+        SSE 异步生成器：将同步流式生成器桥接到 asyncio。
+
+        在线程池中运行 stream_answer_with_docs（同步），通过 asyncio.Queue
+        将每个事件传递给异步消费循环，再以 SSE 格式（data: {}\\n\\n）向客户端推送。
+        """
         import asyncio
         full_answer = []
         sources = []
@@ -1376,6 +1408,12 @@ async def chat_stream(req: ChatRequest):
 
         # 在线程池里运行同步生成器，把 event 放入 asyncio Queue
         def _run_sync():
+            """
+            在线程池中运行同步生成器，将每个事件放入 asyncio Queue。
+
+            使用 call_soon_threadsafe 跨线程安全地操作 Queue，
+            生成完成或异常时放入哨兵 None 通知外层消费循环退出。
+            """
             try:
                 for event in main_engine.stream_answer_with_docs(
                     question=req.question,
@@ -1886,6 +1924,15 @@ async def upload_doc(
     indexed.add(md_path.name)
     _save_indexed(indexed, kb_id)
 
+    # 异步学习文档标题后缀词，自动更新 TITLE_GENERIC_SUFFIXES 配置
+    # 在后台线程执行，不阻塞上传响应
+    from document_processor import extract_and_update_title_suffixes as _extract_suffixes
+    threading.Thread(
+        target=_extract_suffixes,
+        args=(chunks,),
+        daemon=True,
+    ).start()
+
     return {"status": "success", "message": f"文档 {file.filename} 已上传并索引到知识库「{kb['name']}」"}
 
 
@@ -2148,7 +2195,7 @@ async def get_rag_params():
         "rerank_top_k": _cfg.RERANK_TOP_K,
         "chunk_size": _cfg.CHUNK_SIZE,
         "chunk_overlap": _cfg.CHUNK_OVERLAP,
-        "num_ctx": 131072,
+        "num_ctx": _cfg.NUM_CTX,
         "context_limit": getattr(_cfg, "CONTEXT_LIMIT", 20000),
         "thinking": getattr(_cfg, "THINKING", False),
         "chunk_method": getattr(_cfg, "CHUNK_METHOD", "recursive"),
@@ -2196,6 +2243,7 @@ async def save_rag_params(req: RagParamsRequest):
         "CHUNK_OVERLAP": str(req.chunk_overlap),
         "CHUNK_METHOD": req.chunk_method,
         "CONTEXT_LIMIT": str(req.context_limit),
+        "NUM_CTX": str(req.num_ctx),
         "THINKING": str(req.thinking).lower(),
     })
 
@@ -2209,14 +2257,14 @@ async def save_rag_params(req: RagParamsRequest):
     _cfg.CONTEXT_LIMIT = req.context_limit
     _cfg.THINKING = req.thinking
 
-    # num_ctx 需要重建 RAG 引擎才能生效
-    chunk_size_changed = req.chunk_size != _cfg.CHUNK_SIZE
-    if req.num_ctx != 131072 or chunk_size_changed:
-        # 更新所有引擎的 LLM num_ctx
+    # num_ctx 变更时同步更新 RAG 引擎里的 OllamaLLM 实例（answer_with_docs 用）
+    # 先判断再赋值，避免自比较永远为 False
+    if req.num_ctx != getattr(_cfg, "NUM_CTX", 131072):
         with _rag_engines_lock:
             for engine in _rag_engines.values():
                 if engine:
                     engine.llm.num_ctx = req.num_ctx
+    _cfg.NUM_CTX = req.num_ctx   # rewrite_query / stream_answer_with_docs 都读这个
 
     print(f"[RagParams] 参数已更新: TOP_K={req.top_k}, RERANK_TOP_K={req.rerank_top_k}, "
           f"CHUNK_SIZE={req.chunk_size}, CHUNK_OVERLAP={req.chunk_overlap}, "

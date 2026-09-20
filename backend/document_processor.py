@@ -231,6 +231,7 @@ def _convert_pdf_smart(pdf_path: str) -> str:
                         prev_row = new_row
 
                     def cell_md(c):
+                        """将单元格内容转为 Markdown 安全文本：换行转 <br>，去首尾空白"""
                         return str(c).replace('\n', '<br>').strip() if c else ''
 
                     if len(expanded) >= 1:
@@ -586,9 +587,11 @@ def _chunk_recursive(texts: List[str], is_markdown: bool = True, chunk_size: int
     _overlap = chunk_overlap if chunk_overlap is not None else CHUNK_OVERLAP
 
     if is_markdown:
-        separators = ["\n## ", "\n### ", "\n#### ", "\n\n", "\n", "。", ".", " ", ""]
+        # \n 降到句末标点之后，避免把多行 Markdown 表格（每行一个 \n）切碎
+        # 表格行只有 \n 分隔，\n 优先级高会导致表头和数据分进不同 chunk
+        separators = ["\n## ", "\n### ", "\n#### ", "\n\n", "。", ".", "\n", " ", ""]
     else:
-        separators = ["\n\n", "\n", "。", ".", "；", ";", " ", ""]
+        separators = ["\n\n", "。", ".", "；", ";", "\n", " ", ""]
 
     splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
         chunk_size=_size,
@@ -625,7 +628,7 @@ def _chunk_by_markdown_headers(texts: List[str], chunk_size: int = None, chunk_o
     secondary = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
         chunk_size=_size,
         chunk_overlap=_overlap,
-        separators=["\n\n", "\n", "。", ".", " ", ""],
+        separators=["\n\n", "。", ".", "\n", " ", ""],
     )
 
     chunks = []
@@ -652,8 +655,8 @@ def _chunk_by_markdown_headers(texts: List[str], chunk_size: int = None, chunk_o
                     else:
                         chunks.append(sub)
 
-    if not chunks:
-        print("[Chunker] markdown 模式未找到标题，降级到 recursive")
+    if len(chunks) < 2:
+        print("[Chunker] markdown 模式切分结果不足，降级到 recursive")
         return _chunk_recursive(texts, is_markdown=True, chunk_size=_size, chunk_overlap=_overlap)
 
     return chunks
@@ -695,19 +698,34 @@ def _chunk_by_semantic(texts: List[str], chunk_size: int = None, chunk_overlap: 
     # 分批嵌入，每批 32 句，避免请求过大
     BATCH = 32
     embeddings = []
+    failed_ranges = []  # 记录失败批次的句子索引范围
     for i in range(0, len(all_sentences), BATCH):
         batch = all_sentences[i:i + BATCH]
         vecs = _embed_batch(batch)
         if not vecs:
-            print("[SemanticChunker] embedding 失败，降级到 recursive")
-            return _chunk_recursive(texts, is_markdown=True, chunk_size=_size, chunk_overlap=_overlap)
-        embeddings.extend(vecs)
+            print(f"[SemanticChunker] 第 {i//BATCH+1} 批 embedding 失败，跳过该批句子")
+            # 用零向量占位，后续相似度会很低，自然会在该位置切断段落
+            failed_ranges.append((i, i + len(batch)))
+            embeddings.extend([[0.0] * 1] * len(batch))  # 占位
+        else:
+            embeddings.extend(vecs)
+
+    # 如果全部批次都失败，降级到 recursive
+    if len(failed_ranges) * BATCH >= len(all_sentences):
+        print("[SemanticChunker] 所有批次 embedding 均失败，降级到 recursive")
+        return _chunk_recursive(texts, is_markdown=True, chunk_size=_size, chunk_overlap=_overlap)
 
     # ── 计算相邻余弦相似度，找切割点 ──────────────────────────
     import math
     from config import SEMANTIC_THRESHOLD
 
     def _cosine(a: List[float], b: List[float]) -> float:
+        """
+        计算两个向量的余弦相似度。
+
+        Returns:
+            余弦相似度，范围 [-1, 1]；两向量长度为零时返回 0.0
+        """
         dot = sum(x * y for x, y in zip(a, b))
         na  = math.sqrt(sum(x * x for x in a))
         nb  = math.sqrt(sum(x * x for x in b))
@@ -731,7 +749,7 @@ def _chunk_by_semantic(texts: List[str], chunk_size: int = None, chunk_overlap: 
     secondary = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
         chunk_size=_size,
         chunk_overlap=_overlap,
-        separators=["\n\n", "\n", "。", ".", " ", ""],
+        separators=["\n\n", "。", ".", "\n", " ", ""],
     )
     chunks = []
     for seg in segments:
@@ -949,3 +967,179 @@ def cleanup_document(filename: str, upload_dir: str = None) -> bool:
                         print(f"[Cleanup] ⚠️ 无法删除 .md 文件: {md_path.name}")
 
     return deleted
+
+
+# ──────────────────────────────────────────────────────────────
+# 标题后缀自动学习
+# ──────────────────────────────────────────────────────────────
+
+def extract_and_update_title_suffixes(chunks: List[str]) -> None:
+    """
+    从已切分的 chunk 中自动学习标题通用后缀词，合并更新到 word_config.json。
+
+    工作流程：
+      1. 扫描所有 chunk 开头的 [标题路径]，提取末级标题词
+      2. 统计各词出现频次，取出现 ≥ 2 次的候选
+      3. 调用 LLM 判断候选词中哪些是通用后缀（与具体内容无关，如"清单""须知"）
+      4. 将新词合并进 word_config.json，并热更新 config 内存值（无需重启）
+
+    设计原则：
+      - 静默异步执行，任何异常只打印日志，不影响主流程
+      - 幂等：已在配置里的词不会重复添加
+      - 保守：对候选词数量设上限（MAX_CANDIDATES=30），避免 LLM 提示过长
+
+    Args:
+        chunks: chunk_texts 返回的文本块列表
+    """
+    import re as _re
+    from collections import Counter
+    from pathlib import Path as _Path
+
+    # ── 1. 提取所有 chunk 的末级标题词 ─────────────────────────
+    tail_words: List[str] = []
+    for chunk in chunks:
+        m = _re.match(r'^\[([^\]]+)\]', chunk.strip())
+        if not m:
+            continue
+        title_path = m.group(1)
+        # 取路径的最后一级（" > " 分隔）
+        last_title = title_path.split(" > ")[-1].strip()
+        if not last_title:
+            continue
+        # 只取标题末尾 2~4 个汉字作为候选后缀词
+        # 不能取太长（避免把整个短标题当后缀），不能取太短（避免噪音）
+        # 例："国内特药药品清单" → 取最后2字"清单"、最后3字"药清单"... 只保留2~4字
+        for length in (2, 3, 4):
+            suffix = _re.search(r'[\u4e00-\u9fff]{' + str(length) + r'}$', last_title)
+            if suffix:
+                tail_words.append(suffix.group())
+                break  # 只取最短的有效后缀，避免重复
+
+    if not tail_words:
+        return
+
+    # ── 2. 统计频次，筛选候选 ───────────────────────────────────
+    # 从 word_config.json 文件读取当前词表（而非 config 内存变量，避免默认值干扰）
+    import json as _json
+    from pathlib import Path as _Path
+    _word_cfg_path = _Path(__file__).parent / "word_config.json"
+    try:
+        with open(_word_cfg_path, "r", encoding="utf-8") as _f:
+            _word_cfg = _json.load(_f)
+        existing_set = {
+            w for w in _word_cfg.get("title_generic_suffixes", [])
+            if isinstance(w, str) and w
+        }
+        print(f"[TitleSuffix][DEBUG] 读取文件: {_word_cfg_path}, existing_set={existing_set}")
+    except Exception as _e:
+        print(f"[TitleSuffix][DEBUG] 读取文件失败: {_e}，降级到 config 内存变量")
+        # 文件不存在或读取失败，降级到 config 内存变量
+        from config import TITLE_GENERIC_SUFFIXES as _existing
+        existing_set = set(_existing)
+
+    counter = Counter(tail_words)
+    total_titles = len(set(
+        _re.match(r'^\[([^\]]+)\]', c.strip()).group(1).split(" > ")[-1].strip()
+        for c in chunks
+        if _re.match(r'^\[([^\]]+)\]', c.strip())
+    ))
+    # 动态阈值：标题数少时降低要求，多时适当提高
+    min_freq = 1 if total_titles < 10 else 2
+    MAX_CANDIDATES = 30
+
+    candidates = [
+        word for word, cnt in counter.most_common(MAX_CANDIDATES)
+        if cnt >= min_freq and word not in existing_set
+    ]
+    if not candidates:
+        print("[TitleSuffix] 无新候选后缀词，跳过")
+        return
+
+    print(f"[TitleSuffix] 候选后缀词: {candidates}")
+
+    # ── 3. LLM 判断哪些是通用后缀 ──────────────────────────────
+    try:
+        from config import CHAT_MODEL, OLLAMA_BASE_URL, THINKING
+        import httpx as _httpx
+
+        prompt = (
+            "/no_think\n"
+            "以下是从文档标题中提取的词语，请判断哪些是与具体业务内容无关的「通用后缀词」。\n\n"
+            "通用后缀词的特征：\n"
+            "- 出现在标题末尾，描述文档的「类型」或「形式」，而非具体内容\n"
+            "- 例如：清单、列表、明细、目录、须知、说明、介绍、规定、条款、规则、流程、方案、模板\n"
+            "- 反例（非通用，是具体业务词）：保障、赔付、投保、理赔、费用、病种、药品\n\n"
+            f"候选词列表：{candidates}\n\n"
+            "请只返回属于通用后缀词的列表，用英文逗号分隔，不要解释。\n"
+            "如果全部都不是通用后缀词，返回空字符串。"
+        )
+
+        with _httpx.Client(transport=_httpx.HTTPTransport(), timeout=60) as client:
+            resp = client.post(
+                f"{OLLAMA_BASE_URL}/api/generate",
+                json={
+                    "model": CHAT_MODEL,
+                    "prompt": prompt,
+                    "stream": False,
+                    "think": THINKING,
+                    "options": {"temperature": 0, "num_ctx": 2048},
+                },
+            )
+            resp.raise_for_status()
+            raw = resp.json().get("response", "").strip()
+
+        # 解析 LLM 返回的逗号分隔词列表
+        # 只接受在 candidates 里的词（防止 LLM 幻觉），去重
+        llm_words = list(dict.fromkeys(
+            w.strip() for w in raw.replace("，", ",").split(",") if w.strip()
+        ))
+        new_suffixes = [w for w in llm_words if w in candidates]
+        already_known = [w for w in llm_words if w and w not in candidates]
+
+        if already_known:
+            print(f"[TitleSuffix] LLM 返回词中已在词表里的: {already_known}（无需重复添加）")
+        if not new_suffixes:
+            print(f"[TitleSuffix] 无新词需要添加（LLM 返回: {llm_words}）")
+            return
+
+        print(f"[TitleSuffix] LLM 确认新后缀词: {new_suffixes}")
+
+    except Exception as e:
+        print(f"[TitleSuffix] LLM 判断失败，跳过自动学习: {e}")
+        return
+
+    # ── 4. 合并写回 word_config.json ───────────────────────────
+    try:
+        from pathlib import Path as _Path
+        import json as _json
+
+        word_cfg_path = _Path(__file__).parent / "word_config.json"
+
+        # 读取现有 JSON（保留注释 key 和其他字段）
+        if word_cfg_path.exists():
+            with open(word_cfg_path, "r", encoding="utf-8") as f:
+                word_cfg = _json.load(f)
+        else:
+            word_cfg = {}
+
+        current_list: list = word_cfg.get("title_generic_suffixes", [])
+        # 过滤掉注释 key
+        current_set = {w for w in current_list if isinstance(w, str) and not w.startswith("_")}
+
+        merged = sorted(current_set | set(new_suffixes))
+        if merged == sorted(current_set):
+            print("[TitleSuffix] 词表已是最新，无需更新")
+            return
+
+        word_cfg["title_generic_suffixes"] = merged
+        with open(word_cfg_path, "w", encoding="utf-8") as f:
+            _json.dump(word_cfg, f, ensure_ascii=False, indent=4)
+
+        print(f"[TitleSuffix] 已更新 word_config.json: 新增 {new_suffixes}")
+
+        # 热更新 config 模块的内存值，无需重启即生效
+        import config as _cfg
+        _cfg.reload_word_config()
+
+    except Exception as e:
+        print(f"[TitleSuffix] 写入 word_config.json 失败: {e}")

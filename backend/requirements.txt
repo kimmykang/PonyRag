@@ -41,3 +41,15 @@ pydantic==2.13.4
 
 # 配置管理
 python-dotenv==1.2.1
+
+# ── Rerank：CrossEncoder 本地推理（RERANK_METHOD=cross_encoder 时需要）────────
+# sentence-transformers：加载 BAAI/bge-reranker-v2-m3 等 CrossEncoder 模型
+sentence-transformers==6.0.1
+
+# PyTorch：sentence-transformers 的推理后端
+# ⚠️  GPU 加速（推荐）：需单独安装 CUDA 版本，pip install 无法自动选择
+#     安装命令：pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+#     支持 CUDA 版本：cu118 / cu121 / cu124（对应 NVIDIA 驱动 >= 525 / 530 / 550）
+# ✅  CPU 回退：若无 GPU 或不安装 CUDA 版 torch，自动使用 CPU 推理（约慢 27x）
+#     安装命令：pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cpu
+torch==2.6.0

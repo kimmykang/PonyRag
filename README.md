@@ -28,7 +28,7 @@
 
 - 🚀 **开箱即用** — 本地部署，无需云服务，保护数据隐私
 - 📚 **多格式支持** — PDF、Word、Excel、PowerPoint、Markdown、TXT 自动解析
-- 🧠 **智能检索** — 向量检索 + Rerank 精排 + 标题树章节扩展，确保答案准确性
+- 🧠 **智能检索** — 向量检索 + Rerank 精排（CrossEncoder/Listwise/Ollama 三模式可选）+ 标题树章节扩展，确保答案准确性
 - 💬 **多轮对话** — 支持上下文记忆的连续对话
 - 🗂️ **多会话管理** — 侧边栏会话列表，按日期分组，支持新建、切换、重命名、删除会话
 - 🗄️ **多知识库管理** — 创建、启用/禁用多个独立知识库
@@ -79,7 +79,14 @@
 │  Ollama (本地大模型推理)                │
 │  - 对话模型 (Chat Model)                │
 │  - 嵌入模型 (Embedding Model)           │
-│  - 精排模型 (Rerank Model)              │
+│  - Rerank 模型 (可选, Ollama 模式)       │
+└─────────────────────────────────────────┘
+                │
+┌───────────────▼─────────────────────────┐
+│  CrossEncoder (本地 HuggingFace 推理)   │
+│  - BAAI/bge-reranker-v2-m3 等模型       │
+│  - GPU 加速，约 0.1s/6 doc              │
+│  - 默认 Rerank 方式（精度最高）          │
 └─────────────────────────────────────────┘
 ```
 
@@ -88,6 +95,7 @@
 - **向量数据库**: ChromaDB (本地持久化)
 - **大语言模型**: Ollama (支持 Qwen、Llama 等开源模型)
 - **文档解析**: Markitdown (支持多种文档格式)
+- **Rerank 精排**: sentence-transformers CrossEncoder（本地 GPU，默认）/ Ollama / Listwise
 - **前端**: Vanilla JavaScript + Marked.js
 - **数据存储**: SQLite (聊天历史 + 知识库元数据)
 
@@ -202,7 +210,20 @@ pip install -r requirements.txt
 pip install markitdown
 ```
 
-**2.1 可选：安装 OCR 支持**（用于图片型 PDF / 扫描件文字提取）
+**2.1 安装 CrossEncoder Rerank 依赖**（默认 Rerank 方式，推荐）
+```bash
+# CPU 推理（无 GPU 时自动回退）
+pip install sentence-transformers torch
+
+# GPU 加速（推荐，RTX 3090 约 0.1s/6 doc）
+pip install sentence-transformers
+pip install torch --index-url https://download.pytorch.org/whl/cu124
+```
+
+首次运行时系统自动从 HuggingFace 下载 `BAAI/bge-reranker-v2-m3`（约 1.1GB）。
+如需离线使用，提前下载后在 `.env` 设置 `HF_HUB_OFFLINE=1`。
+
+**2.2 可选：安装 OCR 支持**（用于图片型 PDF / 扫描件文字提取）
 ```bash
 pip install markitdown-ocr openai
 ```
@@ -286,8 +307,22 @@ OLLAMA_BASE_URL=http://localhost:11434
 # 模型配置
 CHAT_MODEL=qwen3.6:27b                      # 对话模型
 EMBED_MODEL=qwen3-embedding:4b               # 嵌入模型
-RERANK_MODEL=qllama/bge-reranker-v2-m3:f16  # Rerank 模型
+RERANK_MODEL=qllama/bge-reranker-v2-m3:f16  # Rerank 模型（RERANK_METHOD=ollama 时生效）
 OCR_MODEL=qwen2.5vl:7b                      # OCR 视觉模型（留空禁用）
+
+# Rerank 方式（重要）
+# cross_encoder — 本地 HuggingFace CrossEncoder（默认，精度最高，GPU 约 0.1s）
+# ollama        — 通过 Ollama 推理（embed 或 generate+logprob，自动判断）
+# listwise      — 用 CHAT_MODEL 批量排序（精度高但大模型速度较慢）
+# none          — 禁用 rerank，仅按向量相似度排序
+RERANK_METHOD=cross_encoder
+
+# CrossEncoder 本地模型（RERANK_METHOD=cross_encoder 时生效）
+# 首次使用自动下载，约 1.1GB
+CROSS_ENCODER_MODEL=BAAI/bge-reranker-v2-m3
+
+# HuggingFace 离线模式（模型已下载后建议开启，消除联网警告）
+HF_HUB_OFFLINE=1
 
 # RAG 参数
 TOP_K=6                # 向量检索召回数量
@@ -390,11 +425,21 @@ Ollama 首次加载大模型需要时间（30秒-几分钟），请耐心等待�
 
 ### ⚡ 性能优化建议
 
-| 内存 | 推荐模型组合 | 适用场景 |
-|------|-------------|---------|
-| 16GB | qwen2.5:7b + qwen3-embedding:4b | 个人使用 |
-| 32GB | qwen3.6:27b + qwen3-embedding:4b | 生产环境 |
-| 64GB+ | qwen3.6:27b + qwen3-embedding:8b | 最佳性能 |
+#### 🖥️ 推荐硬件配置
+
+根据 GPU 显存选择合适的模型组合：
+
+| 显存 | 代表显卡 | Chat 模型 | Embedding 模型 | Rerank 模型 | 适用场景 |
+|------|---------|-----------|---------------|------------|---------|
+| **32GB** | RTX 5090 | `qwen3.6:27b` / `qwen3.8:27b` | `qwen3-embedding:8b` | `BAAI/bge-reranker-v2-m3` | 生产环境，最佳精度 |
+| **24GB** | RTX 4090 / 3090 | `qwen3.5:9b` | `qwen3-embedding:8b` | `BAAI/bge-reranker-v2-m3` | 高性能，平衡精度与速度 |
+| **16GB** | RTX 5080 / 5070 Ti | `qwen3.5:9b` | `qwen3-embedding:4b` | `BAAI/bge-reranker-v2-m3` | 个人使用，流畅运行 |
+
+> 💡 **说明：**
+> - `qwen3-embedding:8b` 向量维度 4096，检索精度更高，但首次加载较慢
+> - `qwen3-embedding:4b` 向量维度 2560，速度与精度平衡，16GB 显存推荐选项
+> - Rerank 模型 `BAAI/bge-reranker-v2-m3` 约 567M，所有显存配置均可运行
+> - Chat 模型和 Embedding 模型同时驻留显存，请确保显存留有余量
 
 **TOP_K 参数调优：**
 - 准确度优先：`TOP_K=10, RERANK_TOP_K=6`
@@ -423,6 +468,8 @@ Ollama 首次加载大模型需要时间（30秒-几分钟），请耐心等待�
 - [x] 文档列表列排序（文件名、切分类型、上传时间、状态支持点击排序）
 - [x] 文档列表搜索框（实时过滤文件名）
 - [x] OCR 模型前端修改立即生效（无需重启后端）
+- [x] **Rerank 多模式支持** — CrossEncoder（本地 GPU，默认）/ Listwise / Ollama / none 可在 `.env` 配置切换
+- [x] **CrossEncoder GPU 加速** — BAAI/bge-reranker-v2-m3，RTX 3090 约 0.1s/6doc，Top-1 准确率 5/5
 - [ ] 文档在线预览
 - [ ] 导出聊天记录
 - [ ] 多用户权限管理
@@ -461,7 +508,7 @@ Ollama 首次加载大模型需要时间（30秒-几分钟），请耐心等待�
 
 - 🚀 **Ready to Use** — Local deployment, no cloud services required, data privacy protected
 - 📚 **Multi-format Support** — Auto-parsing for PDF, Word, Excel, PowerPoint, Markdown, TXT
-- 🧠 **Smart Retrieval** — Vector search + Rerank + header-tree section expansion for accurate answers
+- 🧠 **Smart Retrieval** — Vector search + Rerank (CrossEncoder/Listwise/Ollama modes) + header-tree section expansion for accurate answers
 - 💬 **Multi-turn Dialogue** — Context-aware conversations with memory
 - 🗂️ **Multi-session Management** — Sidebar session list with date grouping; create, switch, rename, and delete sessions
 - 🗄️ **Multiple Knowledge Bases** — Create, enable/disable multiple independent knowledge bases
@@ -523,6 +570,7 @@ User Interaction
 - **Vector Database**: ChromaDB (local persistence)
 - **LLM**: Ollama (supports Qwen, Llama, etc.)
 - **Document Parser**: Markitdown (multi-format support)
+- **Rerank**: sentence-transformers CrossEncoder (local GPU, default) / Ollama / Listwise
 - **Frontend**: Vanilla JavaScript
 - **Data Storage**: SQLite (chat history + knowledge base metadata)
 
@@ -635,7 +683,20 @@ pip install -r requirements.txt
 pip install markitdown
 ```
 
-**2.1 Optional: Install OCR support** (for scanned PDFs / image-only documents)
+**2.1 Install CrossEncoder Rerank dependencies** (default Rerank method, recommended)
+```bash
+# CPU inference (auto-fallback when no GPU)
+pip install sentence-transformers torch
+
+# GPU acceleration (recommended, ~0.1s/6 docs on RTX 3090)
+pip install sentence-transformers
+pip install torch --index-url https://download.pytorch.org/whl/cu124
+```
+
+`BAAI/bge-reranker-v2-m3` (~1.1 GB) is downloaded automatically from HuggingFace on first run.
+For offline use, download it in advance and set `HF_HUB_OFFLINE=1` in `.env`.
+
+**2.2 Optional: Install OCR support** (for scanned PDFs / image-only documents)
 ```bash
 pip install markitdown-ocr openai
 ```
@@ -721,8 +782,22 @@ OLLAMA_BASE_URL=http://localhost:11434
 # Model configuration
 CHAT_MODEL=qwen3.6:27b                      # Chat model
 EMBED_MODEL=qwen3-embedding:4b               # Embedding model (⚠️ rebuilds index on change)
-RERANK_MODEL=qllama/bge-reranker-v2-m3:f16  # Rerank model
+RERANK_MODEL=qllama/bge-reranker-v2-m3:f16  # Rerank model (used when RERANK_METHOD=ollama)
 OCR_MODEL=qwen2.5vl:7b                      # OCR vision model (leave empty to disable)
+
+# Rerank method (important)
+# cross_encoder — local HuggingFace CrossEncoder (default, highest accuracy, ~0.1s GPU)
+# ollama        — Ollama API inference (auto-detects embed or generate+logprob)
+# listwise      — batch ranking via CHAT_MODEL (high accuracy but slower with large models)
+# none          — disable rerank, sort by vector similarity only
+RERANK_METHOD=cross_encoder
+
+# CrossEncoder local model (used when RERANK_METHOD=cross_encoder)
+# Downloaded automatically on first use (~1.1 GB)
+CROSS_ENCODER_MODEL=BAAI/bge-reranker-v2-m3
+
+# HuggingFace offline mode (recommended once model is downloaded, suppresses auth warning)
+HF_HUB_OFFLINE=1
 
 # RAG parameters
 TOP_K=6                # Vector search recall count
@@ -827,11 +902,21 @@ Different models have different output dimensions. The system auto-detects this,
 
 ### ⚡ Performance Tuning
 
-| RAM | Recommended model combo | Use case |
-|-----|------------------------|---------|
-| 16 GB | qwen2.5:7b + qwen3-embedding:4b | Personal use |
-| 32 GB | qwen3.6:27b + qwen3-embedding:4b | Production |
-| 64 GB+ | qwen3.6:27b + qwen3-embedding:8b | Best quality |
+#### 🖥️ Recommended Hardware Configuration
+
+Choose the right model combination based on your GPU VRAM:
+
+| VRAM | Representative GPUs | Chat Model | Embedding Model | Rerank Model | Use Case |
+|------|--------------------|-----------|-----------------|-----------|---------| 
+| **32 GB** | RTX 5090 | `qwen3.6:27b` / `qwen3.8:27b` | `qwen3-embedding:8b` | `BAAI/bge-reranker-v2-m3` | Production, best accuracy |
+| **24 GB** | RTX 4090 / 3090 | `qwen3.5:9b` | `qwen3-embedding:8b` | `BAAI/bge-reranker-v2-m3` | High performance, balanced |
+| **16 GB** | RTX 5080 / 5070 Ti | `qwen3.5:9b` | `qwen3-embedding:4b` | `BAAI/bge-reranker-v2-m3` | Personal use, smooth |
+
+> 💡 **Notes:**
+> - `qwen3-embedding:8b` — 4096-dim vectors, higher retrieval accuracy, slower initial load
+> - `qwen3-embedding:4b` — 2560-dim vectors, balanced speed and accuracy, recommended for 16 GB
+> - Rerank model `BAAI/bge-reranker-v2-m3` (~567 MB) runs on all configurations
+> - Chat and Embedding models reside in VRAM simultaneously — leave some headroom
 
 **TOP_K tuning:**
 - Accuracy first: `TOP_K=10, RERANK_TOP_K=6`
@@ -860,6 +945,8 @@ Different models have different output dimensions. The system auto-detects this,
 - [x] Document list column sorting (filename, chunk type, upload time, status)
 - [x] Document list search (real-time filename filter)
 - [x] OCR model change takes effect immediately (no backend restart)
+- [x] **Multi-mode Rerank** — CrossEncoder (local GPU, default) / Listwise / Ollama / none; configurable via `.env`
+- [x] **CrossEncoder GPU acceleration** — BAAI/bge-reranker-v2-m3, ~0.1s/6 docs on RTX 3090, 5/5 Top-1 accuracy
 - [ ] In-browser document preview
 - [ ] Export chat history
 - [ ] Multi-user access control

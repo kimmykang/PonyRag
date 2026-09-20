@@ -588,6 +588,13 @@ async function loadDocuments(kbId) {
     }
 }
 
+/**
+ * 渲染文档列表（简单表格）。
+ *
+ * 展示字段：复选框、文件图标、文件名（可下载链接）、切分类型徽章、上传时间、索引状态、操作。
+ * 切分徽章可点击触发重切分面板；状态徽章优先显示本次会话的上传结果，
+ * 其次使用数据库持久化的 index_status。
+ */
 // 渲染文档列表（简单表格）
 function renderDocuments() {
     const docsList = document.getElementById('docsList');
@@ -719,6 +726,12 @@ function renderDocuments() {
     updateSelectAllCheckbox();
 }
 
+/**
+ * 根据文件扩展名返回对应的 emoji 图标。
+ *
+ * @param {string} ext - 小写扩展名（不含点，如 "pdf"）
+ * @returns {string}   - emoji 字符串
+ */
 // 获取文件图标
 function getFileIcon(ext) {
     const iconMap = {
@@ -735,6 +748,11 @@ function getFileIcon(ext) {
     return iconMap[ext] || '📄';
 }
 
+/**
+ * 切换单个文档的选中状态并重新渲染表格。
+ *
+ * @param {string} filename - 文档文件名
+ */
 // 切换文档选中状态
 function toggleDocSelection(filename) {
     if (state.selectedDocs.has(filename)) {
@@ -745,6 +763,10 @@ function toggleDocSelection(filename) {
     renderDocuments();
 }
 
+/**
+ * 全选 / 取消全选所有文档，并重新渲染表格。
+ * 由表头复选框的 onchange 事件触发。
+ */
 // 全选/取消全选
 function toggleSelectAll() {
     const selectAllCheckbox = document.getElementById('selectAllDocs');
@@ -760,6 +782,12 @@ function toggleSelectAll() {
     renderDocuments();
 }
 
+/**
+ * 同步表头全选复选框的三态状态：
+ *   - 全不选 → unchecked
+ *   - 部分选 → indeterminate
+ *   - 全选   → checked
+ */
 // 更新全选复选框状态
 function updateSelectAllCheckbox() {
     const selectAllCheckbox = document.getElementById('selectAllDocs');
@@ -780,6 +808,11 @@ function updateSelectAllCheckbox() {
     }
 }
 
+/**
+ * 根据已选文档数量更新批量删除按钮状态：
+ *   - 0 个选中 → 禁用按钮
+ *   - N 个选中 → 启用并在按钮文字后显示数量 "(N)"
+ */
 // 更新批量删除按钮状态
 function updateBatchDeleteBtn() {
     const btn = document.getElementById('docsBatchDeleteBtn');
@@ -794,6 +827,18 @@ function updateBatchDeleteBtn() {
 // 支持的文件扩展名
 const ALLOWED_EXTS = new Set(['.pdf', '.docx', '.doc', '.txt', '.md', '.xlsx', '.xls', '.pptx', '.ppt']);
 
+/**
+ * 处理文档上传（文件选择 / 目录选择共用入口）。
+ *
+ * 流程：
+ *   1. 过滤掉隐藏文件、Office 临时文件、不支持的格式，记录跳过原因
+ *   2. 逐个串行上传（避免并发 OOM）
+ *   3. 若切分方式选择「自动检测」，上传前先调 /api/detect-chunk-method 获取推荐
+ *   4. 全部完成后刷新文档列表和统计数据
+ *   5. 若有上传失败或被跳过的文件，弹出结果汇总弹窗
+ *
+ * @param {Event} event - input[type=file] 的 change 事件
+ */
 // 处理文档上传（文件选择 或 目录选择 共用）
 async function handleDocsUpload(event) {
     const allFiles = Array.from(event.target.files || []);
@@ -963,6 +1008,17 @@ async function handleDocsUpload(event) {
     event.target.value = '';
 }
 
+/**
+ * 弹出上传结果汇总弹窗。
+ *
+ * 同时显示：成功数 / 失败列表（含失败原因）/ 跳过列表（格式不支持等）。
+ * 只有在有失败或跳过时才弹出，全部成功时跳过弹窗。
+ *
+ * @param {number} succeeded   - 成功上传的文件数
+ * @param {number} total       - 总文件数（格式合法的）
+ * @param {Array}  failed      - 失败文件列表 [{ name, reason }]
+ * @param {Array}  skippedFiles - 被跳过的文件列表 [{ name, reason }]
+ */
 // 显示上传结果弹窗
 function showUploadResult(succeeded, total, failed, skippedFiles) {
     const modal = document.getElementById('uploadResultModal');
@@ -1013,11 +1069,22 @@ function showUploadResult(succeeded, total, failed, skippedFiles) {
     modal.style.display = 'flex';
 }
 
+/**
+ * 关闭删除确认 Modal。
+ */
 // 删除确认 Modal 辅助
 function closeDeleteDocModal() {
     document.getElementById('deleteDocModal').style.display = 'none';
 }
 
+/**
+ * 显示通用删除确认 Modal，点击确认后执行回调。
+ *
+ * 每次调用前克隆确认按钮以避免多次绑定事件监听器。
+ *
+ * @param {string}   bodyText  - Modal 主体提示文字
+ * @param {Function} onConfirm - 用户点击确认时的回调函数
+ */
 function showDeleteDocModal(bodyText, onConfirm) {
     document.getElementById('deleteDocModalBody').textContent = bodyText;
     applyLang(); // 更新 data-i18n 文字（标题、按钮等）
@@ -1034,6 +1101,12 @@ function showDeleteDocModal(bodyText, onConfirm) {
     document.getElementById('deleteDocModal').style.display = 'flex';
 }
 
+/**
+ * 批量删除已选中的文档（向量库 + 文件系统）。
+ *
+ * 显示确认弹窗（最多列出 5 个文件名）。确认后并发调用
+ * DELETE /api/documents/{filename} 接口，完成后刷新列表。
+ */
 // 批量删除文档
 async function handleBatchDelete() {
     if (state.selectedDocs.size === 0) return;
@@ -1097,6 +1170,14 @@ async function handleBatchDelete() {
     });
 }
 
+/**
+ * 删除单个文档（向量库 + 文件系统）。
+ *
+ * 弹出确认 Modal，确认后调用 DELETE /api/documents/{filename}，
+ * 成功后刷新文档列表和统计数据。
+ *
+ * @param {string} filename - 要删除的文件名（可以是原始文件名或 .md 文件名）
+ */
 // 单个删除文档
 async function deleteSingleDocument(filename) {
     const kbId = state.currentDocsKbId;
@@ -1122,6 +1203,11 @@ async function deleteSingleDocument(filename) {
     });
 }
 
+/**
+ * 关闭上传结果弹窗，并触发一次文档列表刷新。
+ *
+ * 关闭时重新拉取最新列表，确保后端索引完成后页面数据准确。
+ */
 // 关闭上传结果弹窗，并刷新文档列表
 function closeUploadResult() {
     document.getElementById('uploadResultModal').style.display = 'none';
@@ -1132,6 +1218,12 @@ function closeUploadResult() {
     }
 }
 
+/**
+ * 转义 HTML 特殊字符，防止 XSS。
+ *
+ * @param {string} str - 原始字符串
+ * @returns {string}   - 转义后的字符串
+ */
 // 工具函数
 function escapeHtml(str) {
     const div = document.createElement('div');
@@ -1151,6 +1243,12 @@ window.deleteSingleDocument = deleteSingleDocument;
 window.closeUploadResult = closeUploadResult;
 window.closeDeleteDocModal = closeDeleteDocModal;
 
+/**
+ * 点击表头列时触发排序，同一列再次点击则切换升/降序。
+ * 时间列默认降序（最新在前），其他列默认升序。
+ *
+ * @param {string} key - 排序字段：'name' | 'chunk_method' | 'upload_time' | 'index_status'
+ */
 // 表格列排序
 window.sortDocs = function(key) {
     if (state.sortKey === key) {
@@ -1232,11 +1330,20 @@ window.openRechunkPanel = function(filename, method, size, overlap) {
     document.getElementById('rechunkModal').style.display = 'flex';
 };
 
+/**
+ * 关闭重切分弹窗并清除当前操作的文件名。
+ */
 function closeRechunkModal() {
     document.getElementById('rechunkModal').style.display = 'none';
     _rechunkFilename = null;
 }
 
+/**
+ * 根据切分方式显示/隐藏 chunk_size 和 chunk_overlap 输入框。
+ *
+ * 目前所有方式都展示这两个字段（标题树/语义切分用于二次切分上限），
+ * 预留扩展点以备后续某些方式可能不需要。
+ */
 function updateRechunkSizeVisibility() {
     const method = document.getElementById('rechunkMethod').value;
     // 所有切分方式都允许设置 chunk_size（标题树/语义用于二次切分上限）
@@ -1244,6 +1351,12 @@ function updateRechunkSizeVisibility() {
     document.getElementById('rechunkSizeFields').style.display = show ? '' : 'none';
 }
 
+/**
+ * 确认重切分：发送请求到 /api/document/rechunk，完成后刷新文档列表。
+ *
+ * 流程：删除旧向量 → 用新参数重切分 → 重新入库 → 更新 SQLite 记录。
+ * auto 模式下后端会先调 LLM 检测推荐方式再切分。
+ */
 async function confirmRechunk() {
     if (!_rechunkFilename) return;
 
@@ -1294,6 +1407,11 @@ async function confirmRechunk() {
 
 // ── 切分方式下拉框国际化 ─────────────────────────────────────
 
+/**
+ * 刷新两个切分方式下拉框（上传面板 + 重切分面板）的选项文字，使其跟随当前语言。
+ *
+ * 每次语言切换时（langchange 事件）调用，保持选项文字与 i18n 同步。
+ */
 function refreshChunkMethodSelects() {
     var globalLabel = '— ' + t('docs.chunkGlobal') + ' —';
     var autoLabel = t('docs.chunkAuto') || '🤖 自动检测（LLM 推荐）';
@@ -1361,6 +1479,14 @@ function refreshChunkMethodSelects() {
     }
 }
 
+/**
+ * 加载指定知识库的文档列表（增强版）。
+ *
+ * 同时请求 /api/documents 和 /api/documents/chunk-records，
+ * 将切分记录合并到文档对象中，并加载当前全局参数填入输入框 placeholder。
+ *
+ * @param {string} kbId - 知识库 ID
+ */
 // ── loadDocuments 增强版（含切分记录 + 下载链接）─────────────
 
 async function loadDocuments(kbId) {
@@ -1423,6 +1549,12 @@ async function loadDocuments(kbId) {
     }
 }
 
+/**
+ * 渲染文档列表覆盖版（含排序、搜索过滤、下载链接、i18n）。
+ *
+ * 优先级：session 内上传状态 > 数据库持久化 index_status。
+ * 列可点击排序，搜索框实时过滤，切分徽章可点击打开重切分面板。
+ */
 // renderDocuments 覆盖版（含下载链接 + i18n）
 function renderDocuments() {
     const docsList = document.getElementById('docsList');
@@ -1623,6 +1755,9 @@ window.openChunkBrowser = async function(filename, kbId) {
     }
 };
 
+/**
+ * 关闭 Chunk 浏览器弹窗，清空搜索框和缓存数据。
+ */
 function closeChunkBrowser() {
     document.getElementById('chunkBrowserModal').style.display = 'none';
     var inp = document.getElementById('chunkSearchInput');
@@ -1630,6 +1765,11 @@ function closeChunkBrowser() {
     _allChunks = [];
 }
 
+/**
+ * 根据搜索关键词实时过滤 chunk 列表（支持内容、标签、类型、关键词字段）。
+ *
+ * @param {string} query - 搜索关键词（大小写不敏感）
+ */
 function filterChunks(query) {
     if (!query.trim()) {
         renderChunkList(_allChunks);
@@ -1646,6 +1786,14 @@ function filterChunks(query) {
     renderChunkList(filtered);
 }
 
+/**
+ * 渲染 chunk 列表到浏览器弹窗中。
+ *
+ * 每个 chunk 显示：序号徽章、type 标签、tags、disabled 状态、
+ * 内容前 200 字预览，以及「编辑」按钮。
+ *
+ * @param {Array} chunks - chunk 对象数组 [{id, content, metadata, index}]
+ */
 function renderChunkList(chunks) {
     var list = document.getElementById('chunkList');
     if (chunks.length === 0) {
@@ -1688,6 +1836,11 @@ function renderChunkList(chunks) {
     list.innerHTML = html;
 }
 
+/**
+ * 根据序号打开 chunk 编辑弹窗（内部复用 _openChunkEditWithChunk）。
+ *
+ * @param {number} index - chunk 在 _allChunks 中的序号
+ */
 // ── Chunk 编辑 ───────────────────────────────────────────────
 
 function openChunkEdit(index) {
@@ -1696,6 +1849,11 @@ function openChunkEdit(index) {
     _openChunkEditWithChunk(chunk);
 }
 
+/**
+ * 根据 chunk ID 打开编辑弹窗（从 Chunk 列表「编辑」按钮触发）。
+ *
+ * @param {string} chunkId - ChromaDB 中的 chunk ID（MD5 hash）
+ */
 function openChunkEditById(chunkId) {
     var chunk = _allChunks.find(function(c) {
         return c.id === chunkId;
@@ -1704,6 +1862,13 @@ function openChunkEditById(chunkId) {
     _openChunkEditWithChunk(chunk);
 }
 
+/**
+ * 打开 chunk 编辑弹窗的实际实现，填充表单字段。
+ *
+ * 填充内容：content、type、tags、keywords、enabled 复选框。
+ *
+ * @param {{ id, content, metadata }} chunk - 要编辑的 chunk 对象
+ */
 function _openChunkEditWithChunk(chunk) {
     _chunkEditId = chunk.id;
     var meta = chunk.metadata || {};
@@ -1717,11 +1882,20 @@ function _openChunkEditWithChunk(chunk) {
     document.getElementById('chunkEditModal').style.display = 'flex';
 }
 
+/**
+ * 关闭 chunk 编辑弹窗并清除当前编辑状态。
+ */
 function closeChunkEdit() {
     document.getElementById('chunkEditModal').style.display = 'none';
     _chunkEditId = null;
 }
 
+/**
+ * 保存 chunk 编辑内容：校验输入 → 合并元数据 → 调用 PUT /api/document/chunks/{id}
+ * → 重新生成向量写回 ChromaDB → 更新本地缓存并刷新列表。
+ *
+ * 保留原始 metadata 中的 source/chunk_index 等字段，只覆盖用户编辑的部分。
+ */
 async function saveChunkEdit() {
     if (!_chunkEditId) return;
 

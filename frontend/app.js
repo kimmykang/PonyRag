@@ -242,6 +242,12 @@ function initEventListeners() {
 // 知识库管理
 // ============================================================
 
+/**
+ * 从后端加载知识库列表，更新 state.knowledgeBases，并渲染两个知识库选择器。
+ *
+ * 若当前 state.currentKbId 在列表中不存在（如被删除），
+ * 自动回退到默认知识库或第一个可用知识库。
+ */
 async function loadKnowledgeBases() {
     try {
         const res = await fetch(`${API_BASE}/api/knowledge-bases`);
@@ -267,6 +273,10 @@ async function loadKnowledgeBases() {
     }
 }
 
+/**
+ * 渲染文档管理页中的知识库选择下拉框（dom.currentKbSelect）。
+ * 聊天页面不存在此元素，函数会提前返回。
+ */
 function renderKnowledgeBaseSelector() {
     const select = dom.currentKbSelect;
     if (!select) {
@@ -286,6 +296,12 @@ function renderKnowledgeBaseSelector() {
     }
 }
 
+/**
+ * 渲染聊天页顶部的知识库选择下拉框（dom.chatKbSelect）。
+ *
+ * 包含「所有已启用的知识库」选项和每个已启用知识库的独立选项。
+ * 若已有 selectedKbIds 记录，自动恢复选中状态。
+ */
 function renderChatKbSelector() {
     const select = dom.chatKbSelect;
     if (!select) {
@@ -317,6 +333,12 @@ function renderChatKbSelector() {
 // 侧边栏
 // ============================================================
 
+/**
+ * 切换侧边栏的展开/折叠状态。
+ *
+ * 移动端（≤768px）：侧边栏从屏幕左侧滑入/滑出，同时创建遮罩层；
+ * 桌面端：侧边栏折叠/展开，主内容区宽度自适应。
+ */
 function toggleSidebar() {
     const sidebar = dom.sidebar;
     const isMobile = window.innerWidth <= 768;
@@ -347,6 +369,11 @@ function toggleSidebar() {
 // 连接检测
 // ============================================================
 
+/**
+ * 检测后端服务是否可用，更新连接状态指示器。
+ *
+ * 调用 GET /api/health，成功则设置 state.connected = true 并显示绿点。
+ */
 async function checkConnection() {
     try {
         const res = await fetch(`${API_BASE}/api/health`);
@@ -363,6 +390,11 @@ async function checkConnection() {
     }
 }
 
+/**
+ * 更新页面顶部/侧边栏的连接状态指示器（绿点 / 红点 + 文字）。
+ *
+ * @param {boolean} connected - true 表示已连接
+ */
 function updateConnectionStatus(connected) {
     const el = dom.connectionStatus;
     const dot = el.querySelector('.status-dot');
@@ -381,6 +413,15 @@ function updateConnectionStatus(connected) {
 // 删除确认 Modal
 // ============================================================
 
+/**
+ * 显示文档删除确认 Modal。
+ *
+ * 克隆按钮避免重复绑定事件，点击确认后执行 onConfirm 回调，
+ * 点击取消或背景遮罩关闭弹窗。
+ *
+ * @param {string}   filename  - 要删除的文件名，显示在提示文字中
+ * @param {Function} onConfirm - 用户点击确认后的回调函数
+ */
 function showDeleteModal(filename, onConfirm) {
     const modal = document.getElementById('deleteModal');
     document.getElementById('deleteModalBody').textContent = `确定要删除「${filename}」吗？`;
@@ -412,6 +453,15 @@ function showDeleteModal(filename, onConfirm) {
 // 模型设置 Modal
 // ============================================================
 
+/**
+ * 打开系统设置 Modal，并行加载四类数据：
+ *   - 当前模型状态（/api/model-status）
+ *   - Ollama 本地模型列表（/api/ollama/models）
+ *   - 当前 RAG 参数（/api/config/rag-params）
+ *   - 当前模型配置（/api/models，用于获取 OCR 模型）
+ *
+ * 填充三个 Tab 的表单：模型设置、参数设置、通用设置。
+ */
 async function openSettingsModal() {
     const modal = document.getElementById('settingsModal');
     const hint = document.getElementById('settingsHint');
@@ -929,6 +979,17 @@ const MODEL_KEY_MAP = {
 let _modelPollTimer = null;
 let _allModelsReady = false;
 
+/**
+ * 轮询三个模型（chat / embed / rerank）的加载状态，每 3 秒请求一次。
+ *
+ * 状态变化：
+ *   - 有模型仍在加载/检查  → 顶栏显示黄色"模型加载中"
+ *   - 有模型加载失败       → 顶栏显示红色"模型异常"
+ *   - 全部就绪             → 顶栏显示绿色"所有模型就绪"并在 3 秒后淡出
+ *
+ * 使用 _allModelsReady 标志避免重复轮询；外部可将其置为 false 强制恢复轮询
+ *（例如切换模型后）。
+ */
 async function pollModelStatus() {
     if (_allModelsReady) return;
     try {
@@ -997,6 +1058,13 @@ async function pollModelStatus() {
     _modelPollTimer = setTimeout(pollModelStatus, 3000);
 }
 
+/**
+ * 更新 OCR 模型状态显示（侧边栏底部）。
+ *
+ * OCR 模型无需轮询加载状态，只需读取当前配置判断是否已设置：
+ *   - 已配置：显示绿色圆点 + 模型短名
+ *   - 未配置：显示灰色圆点 + "未配置"
+ */
 // OCR 模型状态：从后端读取当前配置，显示模型名或"未启用"
 async function updateOcrModelStatus() {
     const dot = document.getElementById('ms-ocr-dot');
@@ -1023,6 +1091,12 @@ async function updateOcrModelStatus() {
 // 文档管理
 // ============================================================
 
+/**
+ * 从后端加载当前知识库的文档列表，更新 state.documents 并重新渲染。
+ *
+ * 注意：聊天页面（index.html）没有 documentList 元素，会提前返回。
+ * 文档管理功能只在知识库管理页（knowledge.html）中展示。
+ */
 async function loadDocuments() {
     // 聊天页面不需要加载文档列表（文档管理在知识库管理页面）
     if (!dom.documentList) {
@@ -1040,6 +1114,13 @@ async function loadDocuments() {
     }
 }
 
+/**
+ * 渲染 state.documents 到 documentList 容器。
+ *
+ * 每条文档显示：文件名、文件大小、删除按钮。
+ * 点击删除按钮会弹出确认 Modal，确认后调用后端删除接口，
+ * 成功后刷新文档列表和统计数据。
+ */
 function renderDocuments() {
     const list = dom.documentList;
     if (!list) return;
@@ -1057,7 +1138,7 @@ function renderDocuments() {
         </div>
     `).join('');
 
-    // 绑定删除事件
+    // 绑定删除事件：每个删除按钮弹出确认 Modal，确认后调用 DELETE /api/documents/{filename}
     list.querySelectorAll('.doc-item-delete').forEach(btn => {
         btn.addEventListener('click', async (e) => {
             const filename = e.target.dataset.file;
@@ -1080,6 +1161,15 @@ function renderDocuments() {
     });
 }
 
+/**
+ * 批量上传文件（支持多选）。
+ *
+ * 逐个文件串行处理（非并发），避免服务端 OOM / 模型被占用导致超时。
+ * 每个文件经历三个阶段：上传 → 格式转换 → 向量化，进度条实时更新。
+ * 全部处理完成后刷新文档列表和统计数据。
+ *
+ * @param {Event} e - input[type=file] 的 change 事件
+ */
 async function handleFileUpload(e) {
     const files = Array.from(e.target.files);
     if (!files.length) return;
@@ -1147,6 +1237,13 @@ async function handleFileUpload(e) {
     dom.fileInput.value = '';
 }
 
+/**
+ * 加载统计数据：向量库条目数 + 上传文件数，更新侧边栏数字。
+ *
+ * 根据当前选中的知识库决定请求参数：
+ *   - selectedKbIds 为单个 ID → 请求该知识库的统计
+ *   - 其他情况（null 或多个）→ 请求 kb_id=all（所有知识库总和）
+ */
 async function loadStats() {
     try {
         // 根据当前选中的知识库加载对应统计
@@ -1181,6 +1278,24 @@ async function loadStats() {
 // 聊天功能
 // ============================================================
 
+/**
+ * 处理聊天表单提交事件。
+ *
+ * 双击发送按钮可中止当前流式生成：
+ *   1. 通知后端 /api/chat/abort 停止 Ollama GPU 推理
+ *   2. 中止前端 AbortController（关闭 SSE 流）
+ *   3. 重置 isProcessing 状态，恢复输入框
+ *
+ * 正常提交流程：
+ *   1. 添加用户消息气泡
+ *   2. 显示"思考中"动画指示器
+ *   3. 根据 general.streaming 开关：
+ *      - true：调用 /api/chat/stream，逐 token 渲染 Markdown
+ *      - false：调用 /api/chat，等待完整答案后一次性渲染
+ *   4. 完成后更新侧边栏会话列表
+ *
+ * @param {Event} e - form 的 submit 事件
+ */
 async function handleChatSubmit(e) {
     e.preventDefault();
 
@@ -1399,6 +1514,15 @@ async function handleChatSubmit(e) {
     }
 }
 
+/**
+ * 向消息列表添加一条消息气泡。
+ *
+ * @param {'user'|'assistant'} role    - 消息角色
+ * @param {string}             content - 消息内容（AI 回复会渲染 Markdown）
+ * @param {Array}              sources - 参考来源列表（AI 回复专用）
+ * @param {string|null}        createdAt - ISO 时间字符串，用于显示时间戳
+ * @param {object|null}        usage   - token 用量 {prompt_tokens, completion_tokens, total_tokens}
+ */
 function addMessage(role, content, sources = [], createdAt = null, usage = null) {
     const msgDiv = document.createElement('div');
     msgDiv.className = `message ${role}`;
@@ -1446,6 +1570,13 @@ function addMessage(role, content, sources = [], createdAt = null, usage = null)
     scrollToBottom();
 }
 
+/**
+ * 在消息列表末尾添加"思考中"动画指示器。
+ *
+ * 等待后端响应时显示；收到第一个 token 后由调用方调用 .remove() 移除。
+ *
+ * @returns {HTMLElement} 指示器的 DOM 节点（调用方持有引用以便移除）
+ */
 function addTypingIndicator() {
     const msgDiv = document.createElement('div');
     msgDiv.className = 'message assistant';
@@ -1472,7 +1603,14 @@ function addTypingIndicator() {
     return msgDiv;
 }
 
-// 创建流式输出的 AI 消息气泡（内容为空，后续逐步填入）
+/**
+ * 创建流式输出的 AI 消息气泡（内容为空，后续逐步填入 token）。
+ *
+ * 收到第一个 token 时调用，替换掉"思考中"指示器。
+ * 返回 contentDiv 引用，调用方通过 innerHTML 逐步追加渲染后的 Markdown。
+ *
+ * @returns {{ msgDiv: HTMLElement, contentDiv: HTMLElement }}
+ */
 function addStreamingMessage() {
     const msgDiv = document.createElement('div');
     msgDiv.className = 'message assistant';
@@ -1495,6 +1633,12 @@ function addStreamingMessage() {
     };
 }
 
+/**
+ * 在已有消息气泡的末尾追加参考来源区块（流式输出完成后调用）。
+ *
+ * @param {HTMLElement} contentDiv - 消息内容容器
+ * @param {Array}       sources    - 来源列表（同 buildSourcesDiv 参数）
+ */
 // 在消息气泡末尾追加参考来源
 function appendSources(contentDiv, sources) {
     const visibleSources = (sources || []).filter(s => s.score > 0);
@@ -1502,6 +1646,17 @@ function appendSources(contentDiv, sources) {
     contentDiv.appendChild(buildSourcesDiv(visibleSources));
 }
 
+/**
+ * 构建折叠式参考来源 DOM 节点。
+ *
+ * 展示规则：
+ *   - 得分为 0 的来源（标题扩展补全的 chunk）不显示
+ *   - 第一条始终展开显示
+ *   - 其余条目折叠，点击 "+N" 按钮可展开/收起
+ *
+ * @param {Array<{index:number, source:string, score:number}>} visibleSources
+ * @returns {HTMLElement}
+ */
 // 构建折叠式参考来源 DOM
 function buildSourcesDiv(visibleSources) {
     const sourcesDiv = document.createElement('div');
@@ -1567,6 +1722,12 @@ function buildSourcesDiv(visibleSources) {
     return sourcesDiv;
 }
 
+/**
+ * 在消息气泡末尾追加 token 用量统计行（仅流式模式下有数据）。
+ *
+ * @param {HTMLElement} contentDiv - 消息内容容器
+ * @param {{ prompt_tokens: number, completion_tokens: number, total_tokens: number }} usage
+ */
 // 在消息气泡末尾追加 token 用量统计
 function appendUsage(contentDiv, usage) {
     if (!usage) return;
@@ -1584,6 +1745,9 @@ function appendUsage(contentDiv, usage) {
     contentDiv.appendChild(usageDiv);
 }
 
+/**
+ * 将聊天消息容器滚动到底部（使用 requestAnimationFrame 确保 DOM 渲染完成后再滚动）。
+ */
 function scrollToBottom() {
     requestAnimationFrame(() => {
         dom.chatContainer.scrollTop = dom.chatContainer.scrollHeight;
@@ -1594,6 +1758,12 @@ function scrollToBottom() {
 // 工具函数
 // ============================================================
 
+/**
+ * 切换发送按钮的状态（发送 ↔ 停止）。
+ *
+ * 正在处理时：图标切换为停止（方块），按钮始终可点击（用于中止生成）。
+ * 空闲时：图标切换为发送（箭头），输入框为空时禁用按钮。
+ */
 function toggleSendButton() {
     const btn = dom.sendBtn;
     const iconSend = btn.querySelector('.icon-send');
@@ -1616,18 +1786,35 @@ function toggleSendButton() {
     }
 }
 
+/**
+ * 自动调整多行输入框高度，最大 120px，超出后出现滚动条。
+ *
+ * @param {HTMLTextAreaElement} textarea
+ */
 function autoResizeTextarea(textarea) {
     textarea.style.height = 'auto';
     textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
 }
 
+/**
+ * 转义 HTML 特殊字符，防止 XSS。
+ *
+ * @param {string} str - 原始字符串
+ * @returns {string}   - 转义后的字符串
+ */
 function escapeHtml(str) {
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
 }
 
-// ── 通用设置持久化（localStorage）────────────────────────────
+/**
+ * 从 localStorage 读取通用设置项。
+ *
+ * @param {string} key          - 设置键名（会自动加 general_ 前缀）
+ * @param {*}      defaultValue - 键不存在时的默认值
+ * @returns {*}
+ */
 function loadGeneralSetting(key, defaultValue) {
     const raw = localStorage.getItem(`general_${key}`);
     if (raw === null) return defaultValue;
@@ -1638,6 +1825,12 @@ function loadGeneralSetting(key, defaultValue) {
     }
 }
 
+/**
+ * 将通用设置项持久化到 localStorage。
+ *
+ * @param {string} key   - 设置键名（会自动加 general_ 前缀）
+ * @param {*}      value - 需要持久化的值（JSON 序列化存储）
+ */
 function saveGeneralSetting(key, value) {
     localStorage.setItem(`general_${key}`, JSON.stringify(value));
 }
@@ -1705,6 +1898,10 @@ function toggleLangQuick() {
     _updateLangToggleBtn();
 }
 
+/**
+ * 同步更新顶栏语言切换按钮的文字（显示当前语言对应的切换目标）。
+ * 中文 → 显示 "EN"；英文 → 显示 "中"
+ */
 function _updateLangToggleBtn() {
     const btn = document.getElementById('langToggleBtn');
     if (!btn) return;
@@ -1713,6 +1910,13 @@ function _updateLangToggleBtn() {
     btn.title = cur === 'zh' ? 'Switch to English' : '切换为中文';
 }
 
+/**
+ * 将字节数格式化为人类可读的文件大小字符串。
+ * 例如：1536 → "1.5 KB"
+ *
+ * @param {number} bytes - 文件大小（字节）
+ * @returns {string}
+ */
 function formatFileSize(bytes) {
     if (bytes === 0) return '0 B';
     const k = 1024;
@@ -1722,8 +1926,15 @@ function formatFileSize(bytes) {
 }
 
 /**
- * 简易 Markdown 渲染
- * 支持: 粗体、斜体、代码块、行内代码、列表、换行
+ * 简易 Markdown 渲染器（带错误降级）。
+ *
+ * 支持：粗体、斜体、行内代码、标题（h2/h3/h4）、无序/有序列表、
+ *       Markdown 表格（含 &lt;br&gt; 单元格换行）、段落换行。
+ *
+ * 降级：渲染失败时直接输出转义后的纯文本，保证内容不丢失。
+ *
+ * @param {string} text - 原始 Markdown 文本（LLM 输出）
+ * @returns {string}    - HTML 字符串
  */
 function renderMarkdown(text) {
     if (!text) return '';
@@ -1736,6 +1947,22 @@ function renderMarkdown(text) {
     }
 }
 
+/**
+ * Markdown 渲染具体实现（由 renderMarkdown 调用）。
+ *
+ * 处理步骤：
+ *   1. HTML 转义，防止 XSS
+ *   2. 临时标记 &lt;br&gt; 字面量（LLM 在表格单元格内常用）
+ *   3. 解析 Markdown 表格 → HTML table（优先处理，在换行转 &lt;br&gt; 之前）
+ *   4. 处理行内代码、粗体、斜体
+ *   5. 处理标题 h2/h3/h4
+ *   6. 处理无序/有序列表
+ *   7. 换行转 &lt;br&gt;，清理表格标签前后多余的 &lt;br&gt;
+ *   8. 双换行合并为段落分隔
+ *
+ * @param {string} text - 原始 Markdown 文本
+ * @returns {string}    - HTML 字符串
+ */
 function _renderMarkdownImpl(text) {
     if (!text) return '';
 
@@ -1817,11 +2044,9 @@ function _renderMarkdownImpl(text) {
 // ============================================================
 
 /**
- * 页面加载时从后端 SQLite 恢复历史聊天记录。
- * 若有历史消息，隐藏欢迎页并渲染所有消息气泡。
- */
-/**
- * 加载所有会话列表，渲染侧边栏，然后激活最近的一条会话（或新会话）。
+ * 页面加载时从后端加载所有会话列表，渲染侧边栏，然后激活最近的一条会话。
+ *
+ * 若没有历史会话，保持新会话状态（欢迎页可见）。
  */
 async function loadSessions() {
     try {

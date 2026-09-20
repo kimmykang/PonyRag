@@ -65,6 +65,16 @@ class VectorStoreManager:
     """
 
     def __init__(self):
+        """
+        初始化向量库管理器。
+
+        创建两个核心组件：
+          - OllamaEmbeddings：调用 Ollama /api/embed 接口将文本转为向量
+          - chromadb.PersistentClient：持久化客户端，数据写入 VECTOR_DB_PATH 目录
+
+        注意：嵌入模型必须与建库时一致；更换模型后需先清空集合再重新索引，
+        否则维度不匹配会导致检索时报错。
+        """
         # 初始化 Ollama 嵌入模型，用于将文本转为向量
         self.embeddings = OllamaEmbeddings(
             model=EMBED_MODEL,
@@ -126,10 +136,14 @@ class VectorStoreManager:
         # 为每个块生成唯一 ID
         ids = [_doc_id(metadatas[i].get("source", ""), i, chunks[i]) for i in range(len(chunks))]
 
-        # 查询哪些 ID 已存在，过滤后只写入新块
-        existing = col.get(ids=ids, include=[])
-        existing_set = set(existing.get("ids", []))
-        new_indices = [i for i, doc_id in enumerate(ids) if doc_id not in existing_set]
+        # 用 col.count() 快速判断：空集合直接写入，有内容时才查重
+        # 大知识库时 get(ids=[...]) 是线性扫描，这里先用 count 跳过空集合的开销
+        if col.count() > 0:
+            existing = col.get(ids=ids, include=[])
+            existing_set = set(existing.get("ids", []))
+            new_indices = [i for i, doc_id in enumerate(ids) if doc_id not in existing_set]
+        else:
+            new_indices = list(range(len(chunks)))
 
         if not new_indices:
             return 0  # 所有块都已存在，无需写入
@@ -258,8 +272,10 @@ class VectorStoreManager:
             for i, doc_text in enumerate(results["documents"][0]):
                 metadata = results["metadatas"][0][i] if results.get("metadatas") else {}
                 distance = results["distances"][0][i] if results.get("distances") else 0
-                # 将 L2 距离转换为 0~1 相似度（距离越小，相似度越高）
-                similarity = 1.0 / (1.0 + distance)
+                # ChromaDB 余弦距离范围 [0, 2]（0=完全相同，2=完全相反）
+                # 正确转换公式：similarity = 1 - distance（不是 1/(1+distance)）
+                # 错误公式会使不相关文档（distance≈1.5）得到约 0.4 的相似度，高于默认 SIM_THRESHOLD=0.3，过滤失效
+                similarity = max(0.0, 1.0 - distance)
                 documents.append(Document(
                     page_content=doc_text,
                     metadata={**metadata, "similarity_score": similarity},
