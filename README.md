@@ -23,8 +23,9 @@
 ## 🖼️ 界面预览
 
 <div align="center">
-<img src="pic/chinese1.jpg" alt="PonyRAG 聊天界面" width="48%" />
-<img src="pic/chinese2.jpg" alt="PonyRAG 知识库管理界面" width="48%" />
+<img src="pic/chinese1.jpg" alt="PonyRAG 聊天界面" width="80%" />
+
+<img src="pic/chinese2.jpg" alt="PonyRAG 知识库管理界面" width="80%" />
 </div>
 
 ---
@@ -512,8 +513,9 @@ Ollama 首次加载大模型需要时间（30秒-几分钟），请耐心等待�
 ## 🖼️ Screenshots
 
 <div align="center">
-<img src="pic/english1.jpg" alt="PonyRAG Chat Interface" width="48%" />
-<img src="pic/english2.jpg" alt="PonyRAG Knowledge Base Management" width="48%" />
+<img src="pic/english1.jpg" alt="PonyRAG Chat Interface" width="80%" />
+
+<img src="pic/english2.jpg" alt="PonyRAG Knowledge Base Management" width="80%" />
 </div>
 
 ---
