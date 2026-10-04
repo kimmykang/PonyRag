@@ -20,7 +20,16 @@
 
 <div id="中文文档"></div>
 
-## � 项目简介
+## 🖼️ 界面预览
+
+<div align="center">
+<img src="pic/chinese1.jpg" alt="PonyRAG 聊天界面" width="48%" />
+<img src="pic/chinese2.jpg" alt="PonyRAG 知识库管理界面" width="48%" />
+</div>
+
+---
+
+## 📖 项目简介
 
 **PonyRAG** 是一个基于 RAG（检索增强生成）技术的本地知识库问答系统，专为企业和个人知识管理场景设计。系统完全本地部署，保护数据隐私，支持多种文档格式，提供智能问答和知识检索服务。
 
@@ -499,6 +508,15 @@ Ollama 首次加载大模型需要时间（30秒-几分钟），请耐心等待�
 ---
 
 <div id="english-documentation"></div>
+
+## 🖼️ Screenshots
+
+<div align="center">
+<img src="pic/english1.jpg" alt="PonyRAG Chat Interface" width="48%" />
+<img src="pic/english2.jpg" alt="PonyRAG Knowledge Base Management" width="48%" />
+</div>
+
+---
 
 ## 📖 About
 
